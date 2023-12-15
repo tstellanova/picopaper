@@ -10,6 +10,12 @@ cortex-m = "0.7"
 cortex-m-rt = "0.7.3"
 panic-probe = {version="0.3", features = ["print-defmt"] }
 rp-pico = "0.8.0"
+#rp2040-hal = "0.9.1"
+#rp2040-hal = {git="https://github.com/rp-rs/rp-hal" }
+rv3028c7-rtc = "0.5.2"
+chrono = {version = "0.4.31", default-features = false }
+
+
 defmt = "0.3"
 defmt-rtt = "0.3"
 epd-waveshare = {version="0.5.0"}
@@ -17,6 +23,8 @@ epd-waveshare = {version="0.5.0"}
 embedded-graphics = "0.7.1"
 embedded-graphics-core = "0.3.2"
 fugit = "0.3.6"
-#rp2040-hal = "0.6.1"
 embedded-hal = "0.2.7"
-
+numtoa = "0.2.4"
+arraystring = {version="0.3.0" , default-features = false}
+compile-time = "0.2.0"
+time = {version="0.3.29", default-features = false}
