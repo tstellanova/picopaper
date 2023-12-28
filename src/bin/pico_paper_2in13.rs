@@ -17,7 +17,7 @@ use numtoa::NumToA;
 use arraystring::{ArrayString, typenum::{U40} };
 
 use rv3028c7_rtc::{RV3028, DateTimeAccess, Duration, NaiveDateTime, NaiveDate, NaiveTime, Datelike, Timelike, Weekday};
-use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
+// use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 
 use p_hal::{
   Clock,
@@ -149,15 +149,6 @@ fn main() -> ! {
   // config.set_rtc_rtc(true);
   // clocks.configure_sleep_enable(config);
 
-
-  // let sys_dt = generate_datetime();
-  // let mut sys_rtc = rtc::RealTimeClock::new(
-  //   pac.RTC,
-  //   clocks.rtc_clock,
-  //   &mut pac.RESETS,
-  //   sys_dt,
-  // ).unwrap();
-
   let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
   let pins = bsp::Pins::new(
@@ -168,14 +159,14 @@ fn main() -> ! {
   );
 
   // Configure two pins as being I²C, not GPIO
-  let sda_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio4.reconfigure();
-  let scl_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio5.reconfigure();
+  let sda_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio2.reconfigure();
+  let scl_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio3.reconfigure();
 
   // Create the I²C drive, using the two pre-configured pins. This will fail
   // at compile time if the pins are in the wrong mode, or if this I²C
   // peripheral isn't available on these pins!
-  let _i2c = p_hal::I2C::i2c0(
-    pac.I2C0,
+  let i2c = p_hal::I2C::i2c1(
+    pac.I2C1,
     sda_pin,
     scl_pin,
     400.kHz(),
@@ -184,13 +175,23 @@ fn main() -> ! {
   );
 
   // Create a new instance of the RV3028 driver
-  // let mut rtc = RV3028::new(i2c);
+  let mut rtc = RV3028::new(i2c);
 
   // Set from external RTC to internal (since internal is known to be bogus)
-  // let rtc_dt = rtc.datetime().unwrap();
-  let mut rtc_dt = NaiveDateTime::default();
+  let rtc_dt = {
+    let testo = rtc.datetime();
+    if let Ok(val) = testo {
+      val
+    }
+    else {
+      println!("ext rtc fail");
+      NaiveDateTime::default()
+    }
+  } ;
+
+  // let mut rtc_dt = NaiveDateTime::default();
   let sys_dt = naive_datetime_to_rpico(&rtc_dt);
-  let mut sys_rtc = p_hal::rtc::RealTimeClock::new(
+  let sys_rtc = p_hal::rtc::RealTimeClock::new(
     pac.RTC,
     clocks.rtc_clock,
     &mut pac.RESETS,
@@ -319,23 +320,23 @@ fn main() -> ! {
         delay.delay_ms(250);
         continue;
       }
-
-      rtc_dt = rtc_dt
-        .with_hour(dt.hour as u32).unwrap()
-        .with_minute(dt.minute as u32).unwrap()
-        .with_second(dt.second as u32).unwrap();
       last_minute = dt.minute;
 
+      // rtc_dt = rtc_dt
+      //   .with_hour(dt.hour as u32).unwrap()
+      //   .with_minute(dt.minute as u32).unwrap()
+      //   .with_second(dt.second as u32).unwrap();
+
       // TODO get time from external RTC
-      // let rtc_dt = rtc.datetime().unwrap();
-      // let local_dt = rtc_dt.sub(Duration::hours(8));
+      let rtc_dt = rtc.datetime().unwrap();
+      let local_dt = rtc_dt.sub(Duration::hours(8));
 
       let _ = led_pin.set_high();
       display.clear_buffer(Color::White);
       // epd.wake_up(&mut spi, &mut delay).unwrap();
       //epd.clear_frame(&mut spi, &mut delay).unwrap();
 
-      format_time(&rtc_dt,&mut text_buf);
+      format_time(&local_dt,&mut text_buf);
       let time_text =
         Text::with_text_style(
           &text_buf,
@@ -343,7 +344,7 @@ fn main() -> ! {
           fg_char_style, align_style);
       time_text.draw(&mut display).unwrap();
 
-      format_weekday(&rtc_dt, &mut text_buf);
+      format_weekday(&local_dt, &mut text_buf);
       let wd_text =
         Text::with_text_style(
           &text_buf,
@@ -351,7 +352,7 @@ fn main() -> ! {
           fg_char_style, align_style);
       wd_text.draw(&mut display).unwrap();
 
-      format_date(&rtc_dt,&mut text_buf);
+      format_date(&local_dt,&mut text_buf);
       let date_text =
         Text::with_text_style(
           &text_buf,
