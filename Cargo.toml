@@ -18,8 +18,13 @@ chrono = {version = "0.4.31", default-features = false }
 
 defmt = "0.3"
 defmt-rtt = "0.3"
-epd-waveshare = {version="0.5.0"}
+#epd-waveshare = {version="0.5.0"}'
 #epd-waveshare = {version="0.5.0", default-features = false, features=["graphics"] }
+# ,"epd2in13_v3"
+#epd-waveshare =  {version="0.5.0", path = "../epd-waveshare",  default-features = false, features=["graphics","epd2in13_v3"] }
+epd-waveshare =  {version="0.5.0", git = "https://github.com/tstellanova/epd-waveshare", branch ="wip_restable",  default-features = false, features=["graphics","epd2in13_v3"] }
+
+
 embedded-graphics = "0.7.1"
 embedded-graphics-core = "0.3.2"
 fugit = "0.3.6"

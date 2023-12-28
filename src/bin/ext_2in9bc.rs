@@ -246,9 +246,16 @@ fn main() -> ! {
     .alignment(Alignment::Center)
     .build();
 
+  const TEXT_FONT_HEIGHT: i32 = 20;
   let ctr_point =  Point::new( (disp_size.height/2) as i32, (disp_size.width/2) as i32);
-  let time_point = ctr_point.sub(Point::new(0,10));
-  let date_point = ctr_point.add(Point::new(0,10));
+  let time_point = ctr_point.sub(Point::new(0,TEXT_FONT_HEIGHT));
+  let wd_point = time_point.add(Point::new(0,TEXT_FONT_HEIGHT));
+  let date_point = wd_point.add(Point::new(0,TEXT_FONT_HEIGHT));
+
+  // sys_rtc.disable_alarm();
+  // unsafe {
+  //   pac::NVIC::unmask(pac::Interrupt::RTC_IRQ);
+  // }
 
   println!("enter loop...");
   let mut last_minute = 0;
@@ -262,12 +269,15 @@ fn main() -> ! {
       }
       last_minute = dt.minute;
 
+      let rtc_dt = rtc.datetime().unwrap();
+      let local_dt = rtc_dt.sub(Duration::hours(8));
+
       let _ = led_pin.set_high();
       // display.clear_buffer(Color::White);
       epd.wake_up(&mut spi, &mut delay).unwrap();
       epd.clear_frame(&mut spi, &mut delay).unwrap();
 
-      format_time(&dt,&mut text_buf);
+      format_time(&local_dt,&mut text_buf);
       let time_text =
         Text::with_text_style(
           &text_buf,
@@ -275,26 +285,36 @@ fn main() -> ! {
           fg_char_style, align_style);
       time_text.draw(&mut display).unwrap();
 
-      format_date(&dt,&mut text_buf);
+      format_weekday(&local_dt, &mut text_buf);
+      let wd_text =
+        Text::with_text_style(
+          &text_buf,
+          wd_point,
+          fg_char_style, align_style);
+      wd_text.draw(&mut display).unwrap();
+
+      format_date(&local_dt,&mut text_buf);
       let date_text =
         Text::with_text_style(
           &text_buf,
           date_point,
           fg_char_style, align_style);
       date_text.draw(&mut display).unwrap();
+
       let draw_dt =  sys_rtc.now().unwrap();
 
       // push changes to display
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
       let final_dt = sys_rtc.now().unwrap();
-      println!("update+display delta {}", final_dt.second - draw_dt.second);
+      println!("tdelta {}", final_dt.second - draw_dt.second);
 
-      println!("sleeping: {:02}:{:02}:{:02}", final_dt.hour, final_dt.minute, final_dt.second);
+      println!("sleeping: {:02}:{:02}:{:02}", local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
       let _ = led_pin.set_low();
-      // wait until the Pico RTC wakes us up
-      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
+      // // wait until the Pico RTC wakes us up
+      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(33));
+      // // Let the alarm trigger an interrupt in the NVIC.
       // cortex_m::asm::wfi();
       // sys_rtc.clear_interrupt();
       // println!("awake");
@@ -302,46 +322,79 @@ fn main() -> ! {
 
   }
 
-  // #[allow(non_snake_case)]
-  // #[interrupt]
-  // fn RTC_IRQ() {
-  //   critical_section::with(|cs| {
-  //     // borrow the content of the Mutexed RefCell.
-  //     let mut maybe_rtc = SHARED_RTC.borrow_ref_mut(cs);
-  //
-  //     // borrow the content of the Option
-  //     if let Some(rtc) = maybe_rtc.as_mut() {
-  //       // clear the interrupt flag so that it stops firing for now and can be triggered again.
-  //       rtc.clear_interrupt();
-  //     }
-  //   });
-  // }
+ use crate::pac::interrupt;
 
-  fn format_time(dt: &rtc::DateTime, text_buf: &mut ArrayString::<U40>) {
-    let mut num_buffer = [0u8; 20];
-    text_buf.clear();
-    if dt.hour < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.hour.numtoa_str(10, &mut num_buffer));
-    text_buf.push_str(":");
-    if dt.minute < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.minute.numtoa_str(10, &mut num_buffer));
-    text_buf.push_str(":");
-    if dt.second < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.second.numtoa_str(10, &mut num_buffer));
+  #[allow(non_snake_case)]
+  #[interrupt]
+  fn RTC_IRQ() {
+    println!("hiya");
+
+    // critical_section::with(|cs| {
+    //   // borrow the content of the Mutexed RefCell.
+    //   // let mut maybe_rtc = SHARED_RTC.borrow_ref_mut(cs);
+    //
+    //   println!("hiya");
+    //   // // borrow the content of the Option
+    //   // if let Some(rtc) = maybe_rtc.as_mut() {
+    //   //   // clear the interrupt flag so that it stops firing for now and can be triggered again.
+    //   //   rtc.clear_interrupt();
+    //   // }
+    // });
   }
 
-  fn format_date(dt: &rtc::DateTime, text_buf: &mut ArrayString::<U40>) {
+
+  fn format_time(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
     let mut num_buffer = [0u8; 20];
     text_buf.clear();
-    text_buf.push_str(dt.year.numtoa_str(10, &mut num_buffer));
-    text_buf.push_str("-");
-    if dt.month < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.month.numtoa_str(10, &mut num_buffer));
-    text_buf.push_str("-");
-    if dt.day < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.day.numtoa_str(10, &mut num_buffer));
+    if dt.time().hour() < 10 { text_buf.push_str("0");}
+    text_buf.push_str(dt.time().hour().numtoa_str(10, &mut num_buffer));
+    text_buf.push_str(":");
+    if dt.time().minute() < 10 { text_buf.push_str("0");}
+    text_buf.push_str(dt.time().minute().numtoa_str(10, &mut num_buffer));
+    text_buf.push_str(":");
+    if dt.time().second() < 10 { text_buf.push_str("0");}
+    text_buf.push_str(dt.time().second().numtoa_str(10, &mut num_buffer));
   }
 
+
+  fn format_date(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
+    let mut num_buffer = [0u8; 20];
+    text_buf.clear();
+    text_buf.push_str(dt.date().year().numtoa_str(10, &mut num_buffer));
+    text_buf.push_str("-");
+    if dt.date().month() < 10 { text_buf.push_str("0");}
+    text_buf.push_str(dt.date().month().numtoa_str(10, &mut num_buffer));
+    text_buf.push_str("-");
+    if dt.date().day() < 10 { text_buf.push_str("0");}
+    text_buf.push_str(dt.date().day().numtoa_str(10, &mut num_buffer));
+  }
+
+  fn format_weekday(dt: &NaiveDateTime,  text_buf: &mut ArrayString::<U40>) {
+    text_buf.clear();
+    match dt.weekday() {
+      Weekday::Sun => {
+        text_buf.push_str("Sunday");
+      }
+      Weekday::Mon => {
+        text_buf.push_str("Monday");
+      }
+      Weekday::Tue => {
+        text_buf.push_str("Tuesday");
+      }
+      Weekday::Wed => {
+        text_buf.push_str("Wednesday");
+      }
+      Weekday::Thu => {
+        text_buf.push_str("Thursday");
+      }
+      Weekday::Fri => {
+        text_buf.push_str("Friday");
+      }
+      Weekday::Sat => {
+        text_buf.push_str("Saturday");
+      }
+    }
+  }
 
 }
 
