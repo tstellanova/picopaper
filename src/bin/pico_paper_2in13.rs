@@ -11,13 +11,17 @@ use panic_probe as _;
 use fugit::{ RateExtU32};
 
 use rp_pico as bsp;
-use embedded_hal::digital::v2::{OutputPin};
+use embedded_hal::{
+  digital::v2::{OutputPin},
+  PwmPin,
+  blocking::i2c::{Write, Read, WriteRead}
+};
+
 use bsp::hal as p_hal;
 use numtoa::NumToA;
 use arraystring::{ArrayString, typenum::{U40} };
 
 use rv3028c7_rtc::{RV3028, DateTimeAccess, Duration, NaiveDateTime, NaiveDate, NaiveTime, Datelike, Timelike, Weekday};
-// use embedded_hal::blocking::i2c::{Write, Read, WriteRead};
 
 use p_hal::{
   Clock,
@@ -27,20 +31,10 @@ use p_hal::{
   watchdog::Watchdog,
   rtc::{self, DayOfWeek},
   gpio::{FunctionI2C, PullUp},
+  pwm::{FreeRunning, Pwm3, Slice},
 
 };
-
-// use rp2040_hal as p_hal;
-// use p_hal::{
-//   pac::{self, interrupt},
-//   sio::Sio,
-//   clocks::{ClockGate, Clock, init_clocks_and_plls},
-//   // rtc::{self}
-//   watchdog::Watchdog,
-//   rtc::{self, DayOfWeek}
-//
-// };
-
+use cortex_m::delay::Delay;
 
 
 use embedded_graphics::{
@@ -201,6 +195,26 @@ fn main() -> ! {
   let mut led_pin = pins.led.into_push_pull_output();
   led_pin.set_high().unwrap();
 
+  println!("setup PWM audio");
+  let mut pwm_slices = p_hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
+
+  // Configure PWM3
+  let mut pwm = &mut pwm_slices.pwm3;
+  pwm.set_ph_correct();
+  pwm.enable();
+
+  // Create PWM driver on GPIO22 / "GP22" pin
+  let channel = &mut pwm.channel_a;
+  channel.output_to(pins.gpio22);
+  channel.set_duty(0);//initially off
+
+  pwm.set_div_int(AUDIO_PWM_DIVISOR); // To set integer part of clock divider
+  pwm.set_div_frac(0u8); // To set fractional part of clock divider
+
+  println!("test notes");
+  play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
+
+
   let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
   let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12
   let spi1_sck_pin = pins.gpio10.into_function::<bsp::hal::gpio::FunctionSpi>(); //SCK -- pin 14
@@ -322,12 +336,17 @@ fn main() -> ! {
       }
       last_minute = dt.minute;
 
+      if last_minute % 5 == 0 {
+        play_tune(&AULD_LANG_SYNE_VERSE1, &mut pwm, &mut delay);
+        // play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+        // play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+      }
       // rtc_dt = rtc_dt
       //   .with_hour(dt.hour as u32).unwrap()
       //   .with_minute(dt.minute as u32).unwrap()
       //   .with_second(dt.second as u32).unwrap();
 
-      // TODO get time from external RTC
+      // get time from external RTC
       let rtc_dt = rtc.datetime().unwrap();
       let local_dt = rtc_dt.sub(Duration::hours(8));
 
@@ -468,5 +487,125 @@ fn main() -> ! {
   }
 
 }
+
+
+//===== Definitions for PWM audio nonsense ===
+
+const AUDIO_PWM_DIVISOR: u8 = 128;
+
+fn calc_note(freq: f32) -> u16 {
+  const SPLAT_FACTOR: f32 = 12_000_000 as f32 / AUDIO_PWM_DIVISOR as f32;
+  (SPLAT_FACTOR / freq) as u16
+}
+
+fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, note: (f32, u32, u32), delay: &mut Delay) {
+  // const CLOCK_FACTOR: f32 = 125_000_000 as f32 / 40 as f32;
+  if note.0 > 0.0 {
+    let top = calc_note(note.0);
+    pwm.channel_a.set_duty(top / 2); // 50% duty cycle
+    pwm.set_top(top);
+    delay.delay_ms(note.1);
+    // silence
+  }
+  if note.2 > 0 {
+    pwm.channel_a.set_duty(0);
+    delay.delay_ms(note.2);
+  }
+}
+
+fn play_tune(tune: &[SimpleNote], pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay) {
+  println!("play tune: {}", tune.len());
+  for note in tune {
+    play_note(pwm, *note, delay);
+  }
+}
+
+type NoteFrequencyHz = f32;
+type SimpleNote = (NoteFrequencyHz, u32, u32);
+
+const FREQ_C4: NoteFrequencyHz = 261.63;
+const FREQ_D4: NoteFrequencyHz = 293.66;
+const FREQ_E4: NoteFrequencyHz = 329.63;
+const FREQ_F4: NoteFrequencyHz = 349.23;
+const FREQ_G4: NoteFrequencyHz = 392.00;
+const FREQ_A4: NoteFrequencyHz = 440.00;
+const FREQ_B4: NoteFrequencyHz = 493.88;
+const FREQ_C5: NoteFrequencyHz = 523.25;
+const FREQ_D5: NoteFrequencyHz = 587.33;
+
+const C4: SimpleNote = (FREQ_C4, BEAT, STANDARD_PAUSE);
+const D4: SimpleNote = (FREQ_D4, BEAT, STANDARD_PAUSE);
+const E4: SimpleNote = (FREQ_E4, BEAT, STANDARD_PAUSE);
+const F4: SimpleNote = (FREQ_F4, BEAT, STANDARD_PAUSE);
+const G4: SimpleNote = (FREQ_G4, BEAT, STANDARD_PAUSE);
+const A4: SimpleNote = (FREQ_A4, BEAT, STANDARD_PAUSE);
+const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
+const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
+const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
+
+
+const TUNE_BPM: u8 = 83; //166 alternate
+const TUNE_BPS: f32 = TUNE_BPM as f32 /60 as f32;
+const MS_PER_BEAT: u32 = (1000f32/TUNE_BPS) as u32;
+
+const BEAT:u32 = MS_PER_BEAT;
+const HALF_BEAT:u32 = BEAT/2;
+const QTR_BEAT:u32 = BEAT/4;
+const EIGHTH_BEAT:u32 = BEAT/8;
+const FOUR_BEAT:u32 = BEAT*4;
+const TWO_BEAT:u32 = BEAT*2;
+const STANDARD_PAUSE:u32 = 10;
+const HALF_PAUSE:u32 = STANDARD_PAUSE/2;
+const SILENCIO: SimpleNote = (0.0, 0, BEAT);
+
+const DO_RE_MI_TUNE: [SimpleNote; 8] = [C4, D4, E4, F4, G4, A4, B4, C5, ];
+
+
+/*
+C4 F4 E4 F4 A4 G4 F4 G4
+A4 G4 F4 F4 A4 C5 D5
+D5 C5 A4 A4 F4 G4 F4 G4 A4
+F4 D4 D4 C4 F4
+-
+D5 C5 A4 A4 F4 G4 F4 G4 D5 C5
+A4 A4 C5 D5 D5 C5 A4 A4
+F4 G4 F4 G4 A4 G4 F4 D4 D4 C4 F4
+-
+D5 C5 A4 A4 F4 G4 F4 G4 D5 C5
+A4 A4 C5 D5 D5 C5 A4 A4
+F4 G4 F4 G4 A4 G4 F4 D4 D4 C4 F4
+ */
+const AULD_LANG_SYNE_VERSE1: [SimpleNote; 32] = [
+  C4, //(FREQ_C4, TWO_BEAT, STANDARD_PAUSE),
+  F4,
+  (FREQ_E4, HALF_BEAT, STANDARD_PAUSE),
+  F4, A4, G4,
+  (FREQ_F4, HALF_BEAT, STANDARD_PAUSE),
+  G4,
+  A4, G4,
+  (FREQ_F4, HALF_BEAT, STANDARD_PAUSE),
+  F4, A4, C5, (FREQ_D5, TWO_BEAT, STANDARD_PAUSE),
+  SILENCIO,
+  D5, C5, A4, A4, F4, G4, F4, G4, A4,
+  F4, D4, D4, C4, (FREQ_F4, TWO_BEAT, STANDARD_PAUSE),
+  SILENCIO, SILENCIO,
+];
+
+const AULD_LANG_SYNE_VERSE2: [SimpleNote; 32] = [
+  D5, C5,
+  (FREQ_A4, HALF_BEAT, STANDARD_PAUSE),
+  A4, F4, G4,
+  (FREQ_F4, HALF_BEAT, STANDARD_PAUSE),
+  G4,
+  D5, C5,
+  (FREQ_A4, HALF_BEAT, STANDARD_PAUSE),
+  A4, C5,  (FREQ_D5, TWO_BEAT, STANDARD_PAUSE),
+  SILENCIO,
+  D5, C5, A4, A4,
+  F4, G4, F4, G4, A4, G4,
+  F4, D4, D4, C4, (FREQ_F4, TWO_BEAT, STANDARD_PAUSE),
+  SILENCIO, SILENCIO,
+];
+
 
 
