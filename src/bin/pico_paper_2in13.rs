@@ -326,31 +326,33 @@ fn main() -> ! {
   let mut last_minute = 99;
   let mut text_buf =  ArrayString::<U40>::new();
   loop {
-    if let Ok(dt) = sys_rtc.now() {
-      delay.delay_ms(1000);
-      if dt.minute == last_minute {
+    if let Ok(rtc_dt) = rtc.datetime() {
+      if rtc_dt.minute() == last_minute {
         // println!("wait..{:02}:{:02}", dt.minute, dt.second);
         // don't refresh until the next minute
-        delay.delay_ms(250);
+        delay.delay_ms(200);
         continue;
       }
-      last_minute = dt.minute;
-
-      if last_minute % 5 == 0 {
-        play_tune(&AULD_LANG_SYNE_VERSE1, &mut pwm, &mut delay);
-        // play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
-        // play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
-      }
-      // rtc_dt = rtc_dt
-      //   .with_hour(dt.hour as u32).unwrap()
-      //   .with_minute(dt.minute as u32).unwrap()
-      //   .with_second(dt.second as u32).unwrap();
+      let _ = led_pin.set_high();
+      last_minute = rtc_dt.minute();
 
       // get time from external RTC
-      let rtc_dt = rtc.datetime().unwrap();
+      // let rtc_dt = rtc.datetime().unwrap();
       let local_dt = rtc_dt.sub(Duration::hours(8));
 
-      let _ = led_pin.set_high();
+      println!("checking: {:02}:{:02}:{:02}",
+               local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
+
+      if local_dt.day() == 1 && local_dt.month() == 1 &&
+        local_dt.hour() == 0 && local_dt.minute() == 0 {
+        play_tune(&AULD_LANG_SYNE_VERSE1, &mut pwm, &mut delay);
+        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+      }
+      else {
+        play_note(&mut pwm, C4, &mut delay);
+      }
+
       display.clear_buffer(Color::White);
       // epd.wake_up(&mut spi, &mut delay).unwrap();
       //epd.clear_frame(&mut spi, &mut delay).unwrap();
@@ -379,7 +381,7 @@ fn main() -> ! {
           fg_char_style, align_style);
       date_text.draw(&mut display).unwrap();
 
-      let draw_dt =  sys_rtc.now().unwrap();
+      // let draw_dt =  sys_rtc.now().unwrap();
 
       // Demonstrating how to use the partial refresh feature of the screen.
       // Real animations can be used.
@@ -391,19 +393,11 @@ fn main() -> ! {
       epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
       let final_dt = sys_rtc.now().unwrap();
-      println!("tdelta {}", final_dt.second - draw_dt.second);
+      // println!("tdelta {}", final_dt.second - draw_dt.second);
 
-      println!("sleeping: {:02}:{:02}:{:02}", rtc_dt.time().hour() , rtc_dt.time().minute(), rtc_dt.time().second());
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
       let _ = led_pin.set_low();
-
-      // // wait until the Pico RTC wakes us up
-      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(33));
-      // // Let the alarm trigger an interrupt in the NVIC.
-      // cortex_m::asm::wfi();
-      // sys_rtc.clear_interrupt();
-      // println!("awake");
     }
 
 
@@ -491,7 +485,7 @@ fn main() -> ! {
 
 //===== Definitions for PWM audio nonsense ===
 
-const AUDIO_PWM_DIVISOR: u8 = 128;
+const AUDIO_PWM_DIVISOR: u8 = 64;
 
 fn calc_note(freq: f32) -> u16 {
   const SPLAT_FACTOR: f32 = 12_000_000 as f32 / AUDIO_PWM_DIVISOR as f32;
