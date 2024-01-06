@@ -212,8 +212,8 @@ fn main() -> ! {
   pwm.set_div_frac(0u8); // To set fractional part of clock divider
 
   println!("test notes");
-  play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
-
+  // play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
+  play_tune(&HALF_HOUR_CHIME , &mut pwm, &mut delay);
 
   let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
   let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12
@@ -340,7 +340,7 @@ fn main() -> ! {
       // let rtc_dt = rtc.datetime().unwrap();
       let local_dt = rtc_dt.sub(Duration::hours(8));
 
-      println!("checking: {:02}:{:02}:{:02}",
+      println!("check: {:02}:{:02}:{:02}",
                local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
 
       if local_dt.day() == 1 && local_dt.month() == 1 &&
@@ -349,9 +349,13 @@ fn main() -> ! {
         play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
         play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
       }
-      else {
-        play_note(&mut pwm, C4, &mut delay);
+      else if (local_dt.minute() == 0) {
+        play_tune(&HOURLY_CHIME, &mut pwm, &mut delay);
       }
+      else if (local_dt.minute() % 30 == 0) {
+        play_tune(&HALF_HOUR_CHIME, &mut pwm, &mut delay);
+      }
+
 
       display.clear_buffer(Color::White);
       // epd.wake_up(&mut spi, &mut delay).unwrap();
@@ -517,21 +521,32 @@ fn play_tune(tune: &[SimpleNote], pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mu
 type NoteFrequencyHz = f32;
 type SimpleNote = (NoteFrequencyHz, u32, u32);
 
+const FREQ_G3: NoteFrequencyHz = 196.00;
+const FREQ_B3: NoteFrequencyHz =  246.942;
+
 const FREQ_C4: NoteFrequencyHz = 261.63;
 const FREQ_D4: NoteFrequencyHz = 293.66;
 const FREQ_E4: NoteFrequencyHz = 329.63;
 const FREQ_F4: NoteFrequencyHz = 349.23;
+const FREQ_F4_SHARP: NoteFrequencyHz = 369.994;
 const FREQ_G4: NoteFrequencyHz = 392.00;
+const FREQ_G4_SHARP: NoteFrequencyHz = 392.00;
 const FREQ_A4: NoteFrequencyHz = 440.00;
 const FREQ_B4: NoteFrequencyHz = 493.88;
 const FREQ_C5: NoteFrequencyHz = 523.25;
 const FREQ_D5: NoteFrequencyHz = 587.33;
 
+//G♯4, F♯4,
+
+const G3: SimpleNote = (FREQ_G3, BEAT, STANDARD_PAUSE);
+const B3: SimpleNote = (FREQ_B3, BEAT, STANDARD_PAUSE);
 const C4: SimpleNote = (FREQ_C4, BEAT, STANDARD_PAUSE);
 const D4: SimpleNote = (FREQ_D4, BEAT, STANDARD_PAUSE);
 const E4: SimpleNote = (FREQ_E4, BEAT, STANDARD_PAUSE);
 const F4: SimpleNote = (FREQ_F4, BEAT, STANDARD_PAUSE);
+const FS4: SimpleNote = (FREQ_F4_SHARP, BEAT, STANDARD_PAUSE);
 const G4: SimpleNote = (FREQ_G4, BEAT, STANDARD_PAUSE);
+const GS4: SimpleNote = (FREQ_G4_SHARP, BEAT, STANDARD_PAUSE);
 const A4: SimpleNote = (FREQ_A4, BEAT, STANDARD_PAUSE);
 const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
 const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
@@ -553,6 +568,21 @@ const HALF_PAUSE:u32 = STANDARD_PAUSE/2;
 const SILENCIO: SimpleNote = (0.0, 0, BEAT);
 
 const DO_RE_MI_TUNE: [SimpleNote; 8] = [C4, D4, E4, F4, G4, A4, B4, C5, ];
+
+const HOURLY_CHIME: [SimpleNote; 9] = [
+  // TODO big-ben-ify
+  E4, C4, D4, (FREQ_G3, TWO_BEAT, STANDARD_PAUSE),
+  SILENCIO,
+  C4, D4, E4, (FREQ_C4, TWO_BEAT, STANDARD_PAUSE)
+];
+
+const HALF_HOUR_CHIME: [SimpleNote; 8] = [
+  // Big Ben Style
+  // E4, G♯4, F♯4, B3
+  // E4, F♯4, G♯4, E4
+  E4, GS4, FS4, (FREQ_B3, TWO_BEAT, STANDARD_PAUSE),
+  E4, FS4, GS4, (FREQ_E4, TWO_BEAT, STANDARD_PAUSE),
+];
 
 
 /*
