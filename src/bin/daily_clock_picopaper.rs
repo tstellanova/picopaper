@@ -193,7 +193,8 @@ fn main() -> ! {
   println!("test notes");
   // play_note( &mut pwm,  G3, &mut delay);
   // play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
-  play_tune(&HALF_HOUR_CHIME , &mut pwm, &mut delay);
+  play_tune(&BBC_HOUR_PIPS, &mut pwm, &mut delay);
+  // play_tune(&HALF_HOUR_CHIME , &mut pwm, &mut delay);
   // play_tune(&HOURLY_CHIME , &mut pwm, &mut delay);
 
   let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
@@ -257,23 +258,19 @@ fn main() -> ! {
 
   // epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
 
-  display.set_rotation(DisplayRotation::Rotate0);
-  draw_text(&mut display, "0!", min_dim, min_dim);
-
-  display.set_rotation(DisplayRotation::Rotate90);
-  draw_text(&mut display, "90!", min_dim, min_dim);
-
-  display.set_rotation(DisplayRotation::Rotate180);
-  draw_text(&mut display, "180!", min_dim, min_dim);
+  // display.set_rotation(DisplayRotation::Rotate0);
+  // draw_text(&mut display, "0!", min_dim, min_dim);
+  //
+  // display.set_rotation(DisplayRotation::Rotate90);
+  // draw_text(&mut display, "Todd 90!", min_dim, min_dim);
+  //
+  // display.set_rotation(DisplayRotation::Rotate180);
+  // draw_text(&mut display, "180!", min_dim, min_dim);
 
   display.set_rotation(DisplayRotation::Rotate270);
-  draw_text(&mut display, "270!", min_dim, min_dim);
+  draw_text(&mut display, "Todd Stellanova 270!", min_dim, min_dim);
 
   epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay).expect("update fail");
-
-  // for _i in 0..10 {
-  //   delay.delay_ms(200);
-  // }
 
   led_pin.set_low().unwrap();
 
@@ -305,9 +302,9 @@ fn main() -> ! {
 
   // sys_rtc.disable_alarm();
   unsafe {
+    // unmask RTC_IRQ interrupts so we can process them
     pac::NVIC::unmask(pac::Interrupt::RTC_IRQ);
   }
-
 
   println!("enter loop...");
   let mut last_minute = 99;
@@ -315,9 +312,10 @@ fn main() -> ! {
   loop {
     if let Ok(rtc_dt) = rtc.datetime() {
       if rtc_dt.minute() == last_minute {
-        // println!("wait..{:02}:{:02}", dt.minute, dt.second);
+        sys_rtc.set_datetime( naive_datetime_to_rpico(&rtc_dt)).unwrap();
         // don't refresh until the next minute
-        delay.delay_ms(200);
+        println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
+        delay.delay_ms(10);
         continue;
       }
       let _ = led_pin.set_high();
@@ -329,19 +327,6 @@ fn main() -> ! {
 
       println!("check: {:02}:{:02}:{:02}",
                local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
-
-      if local_dt.day() == 1 && local_dt.month() == 1 &&
-        local_dt.hour() == 0 && local_dt.minute() == 0 {
-        play_tune(&AULD_LANG_SYNE_VERSE1, &mut pwm, &mut delay);
-        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
-        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
-      }
-      else if local_dt.minute() == 0 {
-        play_tune(&HOURLY_CHIME, &mut pwm, &mut delay);
-      }
-      else if local_dt.minute() % 30 == 0 {
-        play_tune(&HALF_HOUR_CHIME, &mut pwm, &mut delay);
-      }
 
       display.clear_buffer(Color::White);
 
@@ -385,12 +370,28 @@ fn main() -> ! {
 
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
+
+      if local_dt.day() == 1 && local_dt.month() == 1 &&
+        local_dt.hour() == 0 && local_dt.minute() == 0 {
+        play_tune(&AULD_LANG_SYNE_VERSE1, &mut pwm, &mut delay);
+        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+        play_tune(&AULD_LANG_SYNE_VERSE2, &mut pwm, &mut delay);
+      }
+      else if local_dt.minute() == 0 {
+        play_tune(&HOURLY_CHIME, &mut pwm, &mut delay);
+      }
+      else if local_dt.minute() % 30 == 0 {
+        play_tune(&HALF_HOUR_CHIME, &mut pwm, &mut delay);
+      }
+
+      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
+      enable_rtc_interrupt();
+
+      println!("sleep...");
       let _ = led_pin.set_low();
-      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
-      // println!("deepsleep...");
-      // cortex_m::asm::wfi();
+      cortex_m::asm::wfi();
       // sys_rtc.clear_interrupt();
-      // println!("awake...");
+      println!("awake...");
 
     }
 
@@ -398,82 +399,60 @@ fn main() -> ! {
 
   }
 
+}
 
 
- use crate::pac::interrupt;
 
-  #[allow(non_snake_case)]
-  #[interrupt]
-  fn RTC_IRQ() {
-    println!("hiya");
+fn format_time(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
+  let mut num_buffer = [0u8; 20];
+  text_buf.clear();
+  if dt.time().hour() < 10 { text_buf.push_str("0");}
+  text_buf.push_str(dt.time().hour().numtoa_str(10, &mut num_buffer));
+  text_buf.push_str(":");
+  if dt.time().minute() < 10 { text_buf.push_str("0");}
+  text_buf.push_str(dt.time().minute().numtoa_str(10, &mut num_buffer));
+  text_buf.push_str(":");
+  if dt.time().second() < 10 { text_buf.push_str("0");}
+  text_buf.push_str(dt.time().second().numtoa_str(10, &mut num_buffer));
+}
 
-    // critical_section::with(|cs| {
-    //   // borrow the content of the Mutexed RefCell.
-    //   // let mut maybe_rtc = SHARED_RTC.borrow_ref_mut(cs);
-    //
-    //   println!("hiya");
-    //   // // borrow the content of the Option
-    //   // if let Some(rtc) = maybe_rtc.as_mut() {
-    //   //   // clear the interrupt flag so that it stops firing for now and can be triggered again.
-    //   //   rtc.clear_interrupt();
-    //   // }
-    // });
-  }
+fn format_date(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
+  let mut num_buffer = [0u8; 20];
+  text_buf.clear();
+  text_buf.push_str(dt.date().year().numtoa_str(10, &mut num_buffer));
+  text_buf.push_str("-");
+  if dt.date().month() < 10 { text_buf.push_str("0");}
+  text_buf.push_str(dt.date().month().numtoa_str(10, &mut num_buffer));
+  text_buf.push_str("-");
+  if dt.date().day() < 10 { text_buf.push_str("0");}
+  text_buf.push_str(dt.date().day().numtoa_str(10, &mut num_buffer));
+}
 
-
-  fn format_time(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
-    let mut num_buffer = [0u8; 20];
-    text_buf.clear();
-    if dt.time().hour() < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.time().hour().numtoa_str(10, &mut num_buffer));
-    text_buf.push_str(":");
-    if dt.time().minute() < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.time().minute().numtoa_str(10, &mut num_buffer));
-    text_buf.push_str(":");
-    if dt.time().second() < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.time().second().numtoa_str(10, &mut num_buffer));
-  }
-
-
-  fn format_date(dt: &NaiveDateTime, text_buf: &mut ArrayString::<U40>) {
-    let mut num_buffer = [0u8; 20];
-    text_buf.clear();
-    text_buf.push_str(dt.date().year().numtoa_str(10, &mut num_buffer));
-    text_buf.push_str("-");
-    if dt.date().month() < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.date().month().numtoa_str(10, &mut num_buffer));
-    text_buf.push_str("-");
-    if dt.date().day() < 10 { text_buf.push_str("0");}
-    text_buf.push_str(dt.date().day().numtoa_str(10, &mut num_buffer));
-  }
-
-  fn format_weekday(dt: &NaiveDateTime,  text_buf: &mut ArrayString::<U40>) {
-    text_buf.clear();
-    match dt.weekday() {
-      Weekday::Sun => {
-        text_buf.push_str("Sunday");
-      }
-      Weekday::Mon => {
-        text_buf.push_str("Monday");
-      }
-      Weekday::Tue => {
-        text_buf.push_str("Tuesday");
-      }
-      Weekday::Wed => {
-        text_buf.push_str("Wednesday");
-      }
-      Weekday::Thu => {
-        text_buf.push_str("Thursday");
-      }
-      Weekday::Fri => {
-        text_buf.push_str("Friday");
-      }
-      Weekday::Sat => {
-        text_buf.push_str("Saturday");
-      }
+fn format_weekday(dt: &NaiveDateTime,  text_buf: &mut ArrayString::<U40>) {
+  text_buf.clear();
+  match dt.weekday() {
+    Weekday::Sun => {
+      text_buf.push_str("Sunday");
+    }
+    Weekday::Mon => {
+      text_buf.push_str("Monday");
+    }
+    Weekday::Tue => {
+      text_buf.push_str("Tuesday");
+    }
+    Weekday::Wed => {
+      text_buf.push_str("Wednesday");
+    }
+    Weekday::Thu => {
+      text_buf.push_str("Thursday");
+    }
+    Weekday::Fri => {
+      text_buf.push_str("Friday");
+    }
+    Weekday::Sat => {
+      text_buf.push_str("Saturday");
     }
   }
-
 }
 
 //==== Font used for time display
@@ -492,6 +471,32 @@ pub const CLOCK_FONT: crate::mono_font::MonoFont = crate::mono_font::MonoFont {
   underline: mono_font::DecorationDimensions::default_underline(CLOCK_FONT_HEIGHT),
   strikethrough: mono_font::DecorationDimensions::default_strikethrough(CLOCK_FONT_HEIGHT),
 };
+
+
+//=== Interrupt manipulation ===
+
+use crate::pac::interrupt;
+
+//TODO rp2040-hal has enable_interrupt coming
+fn enable_rtc_interrupt() {
+  unsafe {
+    (*pac::RTC::PTR).inte.modify(|_, w| w.rtc().set_bit());
+  }
+}
+
+//TODO rp2040-hal has disable_interrupt coming
+fn disable_rtc_interrupt() {
+  unsafe {
+    (*pac::RTC::PTR).inte.modify(|_, w| w.rtc().clear_bit());
+  }
+}
+
+
+#[allow(non_snake_case)]
+#[interrupt]
+fn RTC_IRQ() {
+  disable_rtc_interrupt();
+}
 
 
 
@@ -550,7 +555,7 @@ const FREQ_A4: NoteFrequencyHz = 440.00;
 const FREQ_B4: NoteFrequencyHz = 493.88;
 const FREQ_C5: NoteFrequencyHz = 523.25;
 const FREQ_D5: NoteFrequencyHz = 587.33;
-
+const FREQ_BBC_TIME_PIP: NoteFrequencyHz = 1000.0;
 
 pub const B2: SimpleNote = (FREQ_B2, BEAT, STANDARD_PAUSE);
 pub const E3: SimpleNote = (FREQ_E3, BEAT, STANDARD_PAUSE);
@@ -574,6 +579,10 @@ pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
 
+pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 900);
+pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, STANDARD_PAUSE);
+
+
 const TUNE_BPM: u8 = 83; //166 alternate
 const TUNE_BPS: f32 = TUNE_BPM as f32 /60 as f32;
 const MS_PER_BEAT: u32 = (1000f32/TUNE_BPS) as u32;
@@ -588,8 +597,11 @@ pub const STANDARD_PAUSE:u32 = 10;
 pub const HALF_PAUSE:u32 = STANDARD_PAUSE/2;
 pub const SILENCIO: SimpleNote = (0.0, 0, BEAT);
 
+
 pub const DO_RE_MI_TUNE: [SimpleNote; 8] = [C4, D4, E4, F4, G4, A4, B4, C5, ];
 
+pub const BBC_HOUR_PIPS: [SimpleNote; 6] =
+  [BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_LONG_PIP];
 // Some conflicting estimates of Big Ben's tones:
 //
 // Big Ben (note E natural) and the four quarter bells
