@@ -205,10 +205,11 @@ fn main() -> ! {
 
   println!("test notes");
   // play_note( &mut pwm,  G3, &mut delay);
-  // play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
-  play_tune(&BBC_HOUR_PIPS, &mut pwm, &mut delay);
+  play_tune(&DO_RE_MI_TUNE_SHORT, &mut pwm, &mut delay);
+  // play_tune(&BBC_HOUR_PIPS, &mut pwm, &mut delay);
   // play_tune(&HALF_HOUR_CHIME , &mut pwm, &mut delay);
   // play_tune(&HOURLY_CHIME , &mut pwm, &mut delay);
+
 
   let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
   let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12
@@ -269,19 +270,8 @@ fn main() -> ! {
   let disp_height = raw_disp_dim.width.min(raw_disp_dim.height) as i32;
   let min_dim = disp_height / 2;
 
-  // epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
-
-  // display.set_rotation(DisplayRotation::Rotate0);
-  // draw_text(&mut display, "0!", min_dim, min_dim);
-  //
-  // display.set_rotation(DisplayRotation::Rotate90);
-  // draw_text(&mut display, "Todd 90!", min_dim, min_dim);
-  //
-  // display.set_rotation(DisplayRotation::Rotate180);
-  // draw_text(&mut display, "180!", min_dim, min_dim);
-
   display.set_rotation(DisplayRotation::Rotate270);
-  draw_text(&mut display, "Todd Stellanova 270!", min_dim, min_dim);
+  draw_text(&mut display, "270: Todd Stellanova !", min_dim, min_dim);
 
   epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay).expect("update fail");
 
@@ -316,9 +306,8 @@ fn main() -> ! {
   // use Landscape mode, with the RPico pin 1 "up"
   display.set_rotation(DisplayRotation::Rotate90);
 
-  // sys_rtc.disable_alarm();
+  // unmask RTC_IRQ interrupts so we can process them
   unsafe {
-    // unmask RTC_IRQ interrupts so we can process them
     pac::NVIC::unmask(pac::Interrupt::RTC_IRQ);
   }
 
@@ -615,25 +604,21 @@ pub const SILENCIO: SimpleNote = (0.0, 0, BEAT);
 
 
 pub const DO_RE_MI_TUNE: [SimpleNote; 8] = [C4, D4, E4, F4, G4, A4, B4, C5, ];
+pub const DO_RE_MI_TUNE_SHORT: [SimpleNote; 3] = [C4, D4, E4 ];
 
 pub const BBC_HOUR_PIPS: [SimpleNote; 6] =
   [BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_LONG_PIP];
-// Some conflicting estimates of Big Ben's tones:
-//
-// Big Ben (note E natural) and the four quarter bells
-// (G sharp, F sharp, E,  and B),
-// sound the Westminster Chimes.
 
-// ‘E’ is Big Ben’s musical note, as is the third quarter bell
-// ‘G’ is the first quarter bell’s musical note
-// ‘F#’ is the note of the second quarter bell
-// ‘B’ is the fourth bell’s note.
+pub const BIG_BEN_NOTE_SHORT: SimpleNote = (FREQ_E3, BEAT, STANDARD_PAUSE);
 
 pub const HOURLY_CHIME: [SimpleNote; 8] = [
   // TODO big-ben-ify?
   E4, C4, D4, (FREQ_G3, TWO_BEAT, STANDARD_PAUSE),
   C4, D4, E4, (FREQ_C4, TWO_BEAT, STANDARD_PAUSE)
 ];
+
+// E4, G♯4, F♯4, B3
+// E4, F♯4, G♯4, E4
 
 pub const HALF_HOUR_CHIME: [SimpleNote; 8] = [
   // Big Ben Style, quoted as:
