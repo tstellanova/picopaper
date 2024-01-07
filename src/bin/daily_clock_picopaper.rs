@@ -81,6 +81,19 @@ fn naive_datetime_to_rpico(dt: &NaiveDateTime) -> rtc::DateTime {
   }
 }
 
+fn naivedatetime_to_hms(dt: &NaiveDateTime) -> rtc::DateTime {
+  rtc::DateTime {
+    year: 2024,
+    month: 1,
+    day: 1,
+    day_of_week: rtc::DayOfWeek::Monday,
+    hour: dt.hour() as u8,
+    minute: dt.minute() as u8,
+    second: dt.second() as u8,
+  }
+}
+
+
 pub fn draw_text(display: &mut DisplayType, text: &str, x: i32, y: i32) {
   let text_color = epd_waveshare::color::Black;
   let bg_color = epd_waveshare::color::White;
@@ -293,8 +306,11 @@ fn main() -> ! {
 
   const TEXT_FONT_HEIGHT: i32 = 20;
   let ctr_point =  Point::new(disp_width/2 , disp_height/2);
-  let time_point = ctr_point.sub(Point::new(0,CLOCK_FONT_HEIGHT as i32));
-  let wd_point = time_point.add(Point::new(0,CLOCK_FONT_HEIGHT as i32));
+  println!("ctr_point.y: {}", ctr_point.y);
+  let time_point = Point::new(ctr_point.x, 20);
+  // let time_point =  ctr_point.sub(Point::new(0,CLOCK_FONT_HEIGHT as i32));
+  // println!("time_point.y: {}", time_point.y);
+  let wd_point = ctr_point.add(Point::new(0,25));
   let date_point = wd_point.add(Point::new(0,TEXT_FONT_HEIGHT));
 
   // use Landscape mode, with the RPico pin 1 "up"
@@ -312,10 +328,10 @@ fn main() -> ! {
   loop {
     if let Ok(rtc_dt) = rtc.datetime() {
       if rtc_dt.minute() == last_minute {
-        sys_rtc.set_datetime( naive_datetime_to_rpico(&rtc_dt)).unwrap();
+        sys_rtc.set_datetime( naivedatetime_to_hms(&rtc_dt)).unwrap();
         // don't refresh until the next minute
         println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
-        delay.delay_ms(10);
+        delay.delay_ms(100);
         continue;
       }
       let _ = led_pin.set_high();
@@ -456,18 +472,18 @@ fn format_weekday(dt: &NaiveDateTime,  text_buf: &mut ArrayString::<U40>) {
 }
 
 //==== Font used for time display
-pub const CLOCK_FONT_HEIGHT: u32 = 40;
-pub const CLOCK_FONT_WIDTH: u32 = 22;
+pub const CLOCK_FONT_HEIGHT: u32 = 60; //54; //48; //40;
+pub const CLOCK_FONT_WIDTH: u32 = 32; //29; // 22
 
 pub const CLOCK_FONT: crate::mono_font::MonoFont = crate::mono_font::MonoFont {
   image: ImageRaw::new_binary(
-    include_bytes!("../../res/seven-segment-font.raw"),
-    220,
+    include_bytes!("../../res/mplus_60h.raw"),
+    379,
   ),
-  glyph_mapping: &StrGlyphMapping::new("0123456789:", 0),
-  character_size: geometry::Size::new(22, CLOCK_FONT_HEIGHT),
-  character_spacing: 4,
-  baseline: 15,
+  glyph_mapping: &StrGlyphMapping::new("0123456789:!", 0),
+  character_size: geometry::Size::new(CLOCK_FONT_WIDTH, CLOCK_FONT_HEIGHT),
+  character_spacing: 0,
+  baseline: 60,
   underline: mono_font::DecorationDimensions::default_underline(CLOCK_FONT_HEIGHT),
   strikethrough: mono_font::DecorationDimensions::default_strikethrough(CLOCK_FONT_HEIGHT),
 };
