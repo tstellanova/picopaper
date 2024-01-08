@@ -40,6 +40,8 @@ use cortex_m::delay::Delay;
 use embedded_graphics::{prelude::*, mono_font::MonoTextStyleBuilder, text::{Alignment, Baseline, Text, TextStyleBuilder}, mono_font, geometry};
 use embedded_graphics::image::ImageRaw;
 use embedded_graphics::mono_font::mapping::StrGlyphMapping;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::text::TextStyle;
 
 use embedded_graphics_core::{
   geometry::OriginDimensions,
@@ -289,7 +291,7 @@ fn main() -> ! {
     .background_color(BinaryColor::Off )
     .build();
 
-  let align_style = TextStyleBuilder::new()
+  const ALIGN_STYLE: TextStyle = TextStyleBuilder::new()
     .baseline(Baseline::Middle)
     .alignment(Alignment::Center)
     .build();
@@ -298,8 +300,6 @@ fn main() -> ! {
   let ctr_point =  Point::new(disp_width/2 , disp_height/2);
   println!("ctr_point.y: {}", ctr_point.y);
   let time_point = Point::new(ctr_point.x, 20);
-  // let time_point =  ctr_point.sub(Point::new(0,CLOCK_FONT_HEIGHT as i32));
-  // println!("time_point.y: {}", time_point.y);
   let wd_point = ctr_point.add(Point::new(0,25));
   let date_point = wd_point.add(Point::new(0,TEXT_FONT_HEIGHT));
 
@@ -340,7 +340,7 @@ fn main() -> ! {
         Text::with_text_style(
           &text_buf,
           time_point,
-          clock_char_style, align_style);
+          clock_char_style, ALIGN_STYLE);
       time_text.draw(&mut display).unwrap();
 
       format_weekday(&local_dt, &mut text_buf);
@@ -348,7 +348,7 @@ fn main() -> ! {
         Text::with_text_style(
           &text_buf,
           wd_point,
-          fg_char_style, align_style);
+          fg_char_style, ALIGN_STYLE);
       wd_text.draw(&mut display).unwrap();
 
       format_date(&local_dt,&mut text_buf);
@@ -356,7 +356,7 @@ fn main() -> ! {
         Text::with_text_style(
           &text_buf,
           date_point,
-          fg_char_style, align_style);
+          fg_char_style, ALIGN_STYLE);
       date_text.draw(&mut display).unwrap();
 
       // let draw_dt =  sys_rtc.now().unwrap();
@@ -505,23 +505,26 @@ fn RTC_IRQ() {
 
 
 
-//===== Definitions for PWM audio nonsense ===
+//===== Definitions for PWM audio calculations ===
 
 const AUDIO_PWM_DIVISOR: u8 = 64;
 
-fn calc_note(freq: f32) -> u16 {
+/// Calculate the pwm counter top value for a given audio frequency
+fn calc_note_count(freq: f32) -> u16 {
   const SPLAT_FACTOR: f32 = 12_000_000 as f32 / AUDIO_PWM_DIVISOR as f32;
   (SPLAT_FACTOR / freq) as u16
 }
 
-fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, note: (f32, u32, u32), delay: &mut Delay) {
+fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay, note: (f32, u32, u32)) {
   // const CLOCK_FACTOR: f32 = 125_000_000 as f32 / 40 as f32;
-  if note.0 > 0.0 {
-    let top = calc_note(note.0);
+  if note.0 > 20.0 {
+    let top = calc_note_count(note.0);
     pwm.channel_a.set_duty(top / 2); // 50% duty cycle
     pwm.set_top(top);
-    delay.delay_ms(note.1);
-    // silence
+    // sustain
+    if note.1 > 0 {
+      delay.delay_ms(note.1);
+    }
   }
   if note.2 > 0 {
     pwm.channel_a.set_duty(0);
@@ -532,7 +535,7 @@ fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, note: (f32, u32, u32), delay: &
 fn play_tune(tune: &[SimpleNote], pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay) {
   println!("play tune: {}", tune.len());
   for note in tune {
-    play_note(pwm, *note, delay);
+    play_note(pwm, delay, *note);
   }
 }
 
