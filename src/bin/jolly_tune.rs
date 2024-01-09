@@ -97,6 +97,9 @@ fn naivedatetime_to_hms(dt: &NaiveDateTime) -> rtc::DateTime {
 
 const EXTERNAL_XTAL_FREQ_HZ:u32 = 12_000_000u32;
 
+//Pin<FunctionPwm,PullNone,Gp22Pwm3>
+// type PwmPinType = Pin<FunctionPwm,PullNone,Gp22Pwm3>;
+type PwmPinType = Pin<gpio::bank0::Gpio22, gpio::FunctionPwm, gpio::PullDown>;
 
 pub fn draw_text(display: &mut DisplayType, text: &str, x: i32, y: i32) {
   let text_color = epd_waveshare::color::Black;
@@ -147,9 +150,8 @@ fn main() -> ! {
     &mut pac.RESETS,
   );
 
-  //Pin<FunctionPwm,PullNone,Gp22Pwm3>
-  // let pwm_pin: Pin<_, _, _> =
-  pins.gpio22.into_function::<gpio::FunctionPwm>();
+
+  let mut silly_pin:PwmPinType = pins.gpio22.into_function::<gpio::FunctionPwm>();
 
 
   // Configure two pins as being I²C, not GPIO
@@ -304,7 +306,7 @@ fn main() -> ! {
   let cores = mc.cores();
   let core1 = &mut cores[1];
   core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
-    core1_task(clocks.system_clock.freq().to_Hz())
+    core1_task(clocks.system_clock.freq().to_Hz(), silly_pin)
   }).unwrap();
 
   queue_note(&C4, &mut sio.fifo);
@@ -657,7 +659,7 @@ pub const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
 pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
-pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, QTR_BEAT, STANDARD_PAUSE);
+pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, EIGHTH_BEAT, HALF_PAUSE);
 pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 900);
 pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, STANDARD_PAUSE);
 
@@ -778,22 +780,16 @@ use rp_pico::hal::sio::SioFifo;
 static mut CORE1_STACK: Stack<4096> = Stack::new();
 
 /// The main task of the second core, "Core 1"
-fn core1_task(sys_freq: u32) -> ! {
+fn core1_task(sys_freq: u32, silly_pin: PwmPinType) -> ! {
   println!("core1_task start... ");
-  // let core = pac::CorePeripherals::take().unwrap();
   let core = unsafe { pac::CorePeripherals::steal() };
+  let mut pac = unsafe { pac::Peripherals::steal() };
 
-  // let mut le_pac = pac::Peripherals::take().unwrap();
-  let mut le_pac = unsafe { pac::Peripherals::steal() };
-
-  let mut sio = Sio::new(le_pac.SIO);
-
+  let mut sio = Sio::new(pac.SIO);
   let mut delay = cortex_m::delay::Delay::new(core.SYST, sys_freq);
 
-
-
   // println!("setup PWM player: {} ms per beat", MS_PER_BEAT);
-  let mut pwm_slices = p_hal::pwm::Slices::new(le_pac.PWM, &mut le_pac.RESETS);
+  let mut pwm_slices = p_hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
 
   // Configure PWM3
   let mut pwm = &mut pwm_slices.pwm3;
@@ -805,6 +801,7 @@ fn core1_task(sys_freq: u32) -> ! {
 
   // Create PWM driver on GPIO22 / "GP22" pin
 
+  // TODO creating a Pins struct here appears to cause multicore problems
   // let pins = bsp::Pins::new(
   //   le_pac.IO_BANK0,
   //   le_pac.PADS_BANK0,
@@ -813,18 +810,12 @@ fn core1_task(sys_freq: u32) -> ! {
   // );
   //  let silly_pin = pins.gpio22.into_function::<gpio::FunctionPwm>();
 
-  // Configure GPIO 22 as an output
-  let silly_pin:  gpio::Pin<gpio::bank0::Gpio22, gpio::FunctionPwm, gpio::PullNone> =  unsafe { core::mem::zeroed() };
+  // Hack to grab uninit  GPIO 22 as an output
+  // let silly_pin:  gpio::Pin<gpio::bank0::Gpio22, gpio::FunctionPwm, gpio::PullNone> =  unsafe { core::mem::zeroed() };
   channel.output_to(silly_pin);
 
   pwm.set_div_int(AUDIO_PWM_DIVISOR); // To set integer part of clock divider
   pwm.set_div_frac(0u8); // To set fractional part of clock divider
-
-  // println!("test notes");
-  // play_note( &mut pwm,  G3, &mut delay);
-  // play_tune(&DO_RE_MI_TUNE_SHORT, &mut pwm, &mut delay);
-  // play_tune(&HOURLY_CHIME,&mut pwm, &mut delay);
-
 
   loop {
     let word = sio.fifo.read_blocking();
