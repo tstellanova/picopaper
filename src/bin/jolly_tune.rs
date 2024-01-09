@@ -3,7 +3,7 @@
 #![no_main]
 
 use core::ops::{Add, Sub};
-use rp_pico::entry;
+use rp_pico::{entry};
 use defmt::*;
 use defmt_rtt as _;
 use panic_probe as _;
@@ -147,6 +147,11 @@ fn main() -> ! {
     &mut pac.RESETS,
   );
 
+  //Pin<FunctionPwm,PullNone,Gp22Pwm3>
+  // let pwm_pin: Pin<_, _, _> =
+  pins.gpio22.into_function::<gpio::FunctionPwm>();
+
+
   // Configure two pins as being I²C, not GPIO
   let sda_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio2.reconfigure();
   let scl_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio3.reconfigure();
@@ -190,12 +195,7 @@ fn main() -> ! {
   let mut led_pin = pins.led.into_push_pull_output();
   led_pin.set_high().unwrap();
 
-  let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
-  let cores = mc.cores();
-  let core1 = &mut cores[1];
-  let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
-    core1_task(clocks.system_clock.freq().to_Hz())
-  });
+
 
   // queue_tune(&DO_RE_MI_TUNE_SHORT, &mut sio.fifo);
 
@@ -224,6 +224,9 @@ fn main() -> ! {
   // (Tx, Sck) (MOSI, SCK)
   let spi1_periph = p_hal::Spi::<_, _, _, 8>::new(pac.SPI1, (spi1_do_pin, spi1_sck_pin) );
 
+  // for rendering strings
+  let mut text_buf =  ArrayString::<U40>::new();
+
   println!("create SPI...");
   // Exchange the uninitialized SPI driver for an initialized one
   let mut spi = spi1_periph.init(
@@ -243,8 +246,8 @@ fn main() -> ! {
     &mut delay,
   ).expect("epaper new error");
 
-  epd.wake_up(&mut spi, &mut delay).unwrap();
-  epd.clear_frame(&mut spi, &mut delay).unwrap();
+  epd.wake_up(&mut spi, &mut delay).expect("EPD wake_up fail");
+  epd.clear_frame(&mut spi, &mut delay).expect("EPD clear_frame fail");
 
   println!("create display...");
   // Use display graphics from embedded-graphics
@@ -297,9 +300,17 @@ fn main() -> ! {
     pac::NVIC::unmask(pac::Interrupt::RTC_IRQ);
   }
 
+  let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+  let cores = mc.cores();
+  let core1 = &mut cores[1];
+  core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
+    core1_task(clocks.system_clock.freq().to_Hz())
+  }).unwrap();
+
+  queue_note(&C4, &mut sio.fifo);
+
   println!("enter loop...");
   let mut last_minute = 99;
-  let mut text_buf =  ArrayString::<U40>::new();
   loop {
     if let Ok(rtc_dt) = rtc.datetime() {
       if rtc_dt.minute() == last_minute {
@@ -375,7 +386,7 @@ fn main() -> ! {
         queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
       }
       else {
-        queue_note(&BBC_TIME_PIP,  &mut sio.fifo);
+        queue_note(&FAST_PIP,  &mut sio.fifo);
       }
 
       sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
@@ -525,7 +536,7 @@ fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay, note: Simple
 }
 
 fn play_tune(tune: &[SimpleNote], pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay) {
-  // println!("play tune: {}", tune.len());
+  println!("play tune: {}", tune.len());
   for note in tune {
     play_note(pwm, delay, *note);
   }
@@ -542,7 +553,7 @@ fn queue_tune(tune: &[SimpleNote], fifo: &mut SioFifo)
 
 fn queue_note(note: &SimpleNote, fifo: &mut SioFifo)
 {
-  println!("queue_note: {}", note);
+  // println!("queue_note: {}", note);
   let note_number: u8 =
     if let Some((index, _)) =
       FREQ_KEY_MAP.iter().enumerate().find(|&(_, &val)| val == note.0) {
@@ -561,8 +572,6 @@ fn queue_note(note: &SimpleNote, fifo: &mut SioFifo)
       3
     };
 
-  // let note_number: u8 = (FREQ_KEY_MAP.len() / 2) as u8;
-  // let sustain_idx = 3;
   let send_buf = [
     0, // MAGIC
     note_number,
@@ -570,7 +579,7 @@ fn queue_note(note: &SimpleNote, fifo: &mut SioFifo)
     (note.2 % 256) as u8
   ];
   let send_word:u32 = u32::from_ne_bytes(send_buf);
-  fifo.write(send_word);
+  fifo.write_blocking(send_word);
 
 }
 
@@ -599,32 +608,32 @@ const FREQ_B4: NoteFrequencyHz = 493.88;
 const FREQ_C5: NoteFrequencyHz = 523.25;
 const FREQ_D5: NoteFrequencyHz = 587.33;
 const FREQ_BBC_TIME_PIP: NoteFrequencyHz = 1000.0;
+const FREQ_FAST_PIP: NoteFrequencyHz  = 400.0;
 
+const FREQ_KEY_MAP: [NoteFrequencyHz; 20] = [
+  FREQ_B2,
 
-const FREQ_KEY_MAP: [NoteFrequencyHz; 19] = [
- FREQ_B2,
+  FREQ_E3 ,
+  FREQ_F3 ,
+  FREQ_F3_SHARP ,
+  FREQ_G3 ,
+  FREQ_G3_SHARP ,
 
- FREQ_E3 ,
- FREQ_F3 ,
- FREQ_F3_SHARP ,
- FREQ_G3 ,
- FREQ_G3_SHARP ,
+  FREQ_B3 ,
 
- FREQ_B3 ,
-
- FREQ_C4 ,
- FREQ_D4 ,
- FREQ_E4 ,
- FREQ_F4 ,
- FREQ_F4_SHARP ,
- FREQ_G4 ,
- FREQ_G4_SHARP ,
- FREQ_A4,
- FREQ_B4 ,
- FREQ_C5 ,
-FREQ_D5 ,
-FREQ_BBC_TIME_PIP,
-
+  FREQ_C4 ,
+  FREQ_D4 ,
+  FREQ_E4 ,
+  FREQ_F4 ,
+  FREQ_F4_SHARP ,
+  FREQ_G4 ,
+  FREQ_G4_SHARP ,
+  FREQ_A4,
+  FREQ_B4 ,
+  FREQ_C5 ,
+  FREQ_D5 ,
+  FREQ_BBC_TIME_PIP,
+  FREQ_FAST_PIP,
 ];
 
 pub const B2: SimpleNote = (FREQ_B2, BEAT, STANDARD_PAUSE);
@@ -648,7 +657,7 @@ pub const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
 pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
-
+pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, QTR_BEAT, STANDARD_PAUSE);
 pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 900);
 pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, STANDARD_PAUSE);
 
@@ -754,6 +763,7 @@ const AULD_LANG_SYNE_VERSE2: [SimpleNote; 32] = [
 
 // ==== multicore support ===
 use p_hal::multicore::{Multicore, Stack};
+use rp_pico::hal::gpio;
 use rp_pico::hal::sio::SioFifo;
 
 /// Stack for core 1
@@ -769,58 +779,67 @@ static mut CORE1_STACK: Stack<4096> = Stack::new();
 
 /// The main task of the second core, "Core 1"
 fn core1_task(sys_freq: u32) -> ! {
-  let mut pac = unsafe { pac::Peripherals::steal() };
+  println!("core1_task start... ");
+  // let core = pac::CorePeripherals::take().unwrap();
   let core = unsafe { pac::CorePeripherals::steal() };
 
-  let mut sio = Sio::new(pac.SIO);
-  let pins = p_hal::gpio::Pins::new(
-    pac.IO_BANK0,
-    pac.PADS_BANK0,
-    sio.gpio_bank0,
-    &mut pac.RESETS,
-  );
+  // let mut le_pac = pac::Peripherals::take().unwrap();
+  let mut le_pac = unsafe { pac::Peripherals::steal() };
+
+  let mut sio = Sio::new(le_pac.SIO);
+
   let mut delay = cortex_m::delay::Delay::new(core.SYST, sys_freq);
 
+
+
   // println!("setup PWM player: {} ms per beat", MS_PER_BEAT);
-  let mut pwm_slices = p_hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
+  let mut pwm_slices = p_hal::pwm::Slices::new(le_pac.PWM, &mut le_pac.RESETS);
 
   // Configure PWM3
   let mut pwm = &mut pwm_slices.pwm3;
   pwm.set_ph_correct();
   pwm.enable();
 
-  // Create PWM driver on GPIO22 / "GP22" pin
   let channel = &mut pwm.channel_a;
-  channel.output_to(pins.gpio22);
   channel.set_duty(0);//initially off
+
+  // Create PWM driver on GPIO22 / "GP22" pin
+
+  // let pins = bsp::Pins::new(
+  //   le_pac.IO_BANK0,
+  //   le_pac.PADS_BANK0,
+  //   sio.gpio_bank0,
+  //   &mut le_pac.RESETS,
+  // );
+  //  let silly_pin = pins.gpio22.into_function::<gpio::FunctionPwm>();
+
+  // Configure GPIO 22 as an output
+  let silly_pin:  gpio::Pin<gpio::bank0::Gpio22, gpio::FunctionPwm, gpio::PullNone> =  unsafe { core::mem::zeroed() };
+  channel.output_to(silly_pin);
 
   pwm.set_div_int(AUDIO_PWM_DIVISOR); // To set integer part of clock divider
   pwm.set_div_frac(0u8); // To set fractional part of clock divider
 
   // println!("test notes");
   // play_note( &mut pwm,  G3, &mut delay);
-  play_tune(&DO_RE_MI_TUNE, &mut pwm, &mut delay);
+  // play_tune(&DO_RE_MI_TUNE_SHORT, &mut pwm, &mut delay);
   // play_tune(&HOURLY_CHIME,&mut pwm, &mut delay);
 
+
   loop {
-    if sio.fifo.is_read_ready() {
-      if let Some(word) = sio.fifo.read() {
-        let msg_bytes:[u8; 4] = word.to_ne_bytes();
-        if msg_bytes[0] == 0 { // MAGIC byte
-          let le_note: SimpleNote = (
-            FREQ_KEY_MAP[msg_bytes[1] as usize],
-            BEAT_MAP[msg_bytes[2] as usize] as u32,
-            // msg_bytes[2] as u32,
-            msg_bytes[3] as u32
-          );
-          // println!("le_note: {}", le_note);
-          play_note(&mut pwm, &mut delay, le_note);
-        }
-      }
+    let word = sio.fifo.read_blocking();
+    let msg_bytes:[u8; 4] = word.to_ne_bytes();
+    if msg_bytes[0] == 0 { // MAGIC byte
+      let le_note: SimpleNote = (
+        FREQ_KEY_MAP[msg_bytes[1] as usize],
+        BEAT_MAP[msg_bytes[2] as usize] as u32,
+        // msg_bytes[2] as u32,
+        msg_bytes[3] as u32
+      );
+      println!("le_note: {}", le_note);
+      play_note(&mut pwm, &mut delay, le_note);
     }
-    else {
-      delay.delay_ms(10);
-    }
+
   }
 
 }
