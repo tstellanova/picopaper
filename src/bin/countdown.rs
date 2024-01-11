@@ -306,58 +306,63 @@ fn main() -> ! {
     core1_task(clocks.system_clock.freq().to_Hz(), silly_pin)
   }).unwrap();
 
+
   queue_tune(&DO_RE_MI_TUNE_SHORT, &mut sio.fifo);
 
 
-  let mut target_time  = rtc_dt.time().add(Duration::minutes(1)).with_second(0).unwrap();
+  let mut target_time  = rtc_dt.time();//.add(Duration::minutes(1)).with_second(0).unwrap();
 
   println!("enter loop...");
-  // let mut last_minute = 99;
+  let mut target_second = 0;
   loop {
     // get time from external RTC
     if let Ok(rtc_dt) = rtc.datetime() {
-      let rtc_time = rtc_dt.time();
-      if rtc_time.lt(&target_time) {
-      // if rtc_dt.minute() == last_minute {
+      if rtc_dt.time().lt(&target_time) {
         sys_rtc.set_datetime( naivedatetime_to_hms(&rtc_dt)).unwrap();
         // don't refresh until the next minute
-        println!("wait..{:02}:{:02}", rtc_time.minute(), rtc_time.second());
-        delay.delay_ms(100);
+        println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
+        delay.delay_ms(250);
         continue;
       }
       let _ = led_pin.set_high();
-      // last_minute = rtc_dt.minute();
 
       let local_dt = rtc_dt.sub(Duration::hours(8));
-      println!("check: {:02}:{:02}:{:02}",
-               local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
+      println!("check: {:02}:{:02}:{:02} target_second: {}",
+               local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second(),
+                target_second);
 
-      if local_dt.day() == 1 && local_dt.month() == 1 &&
-        local_dt.hour() == 0 && local_dt.minute() == 0 {
-        queue_tune(&AULD_LANG_SYNE_VERSE1, &mut sio.fifo);
-        queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
-        queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
-      }
-      else if local_dt.minute() == 0 {
-        queue_tune(&HOURLY_CHIME, &mut sio.fifo);
+      if local_dt.minute() == 0 {
+        if local_dt.hour() == 0  && local_dt.day() == 1 && local_dt.month() == 1   {
+          queue_tune(&AULD_LANG_SYNE_VERSE1, &mut sio.fifo);
+          queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
+          queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
+        }
+        else {
+          queue_tune(&HOURLY_CHIME, &mut sio.fifo);
+        }
+        target_second = 0;
       }
       else if local_dt.minute() % 30 == 0 {
         queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
+        target_second = 0;
       }
       else {
-        match rtc_time.second() {
-          0 => {
+        match rtc_dt.second() {
+          0  => {
             queue_note(&BBC_TIME_LONG_PIP, &mut sio.fifo);
+            target_second = 0;
           }
           59 | 58 | 57 | 56 | 55  => {
             queue_note(&BBC_TIME_PIP, &mut sio.fifo);
-            delay.delay_ms(500);
+            target_second = rtc_dt.second() + 1; // can go up to 60
           }
           _ => {
-            println!("weird sec: {}", rtc_time.second());
+            println!("weird sec: {}", rtc_dt.second());
+            target_second = 0;
           }
         }
       }
+
 
       display.clear_buffer(Color::White);
 
@@ -385,36 +390,25 @@ fn main() -> ! {
           fg_char_style, ALIGN_STYLE);
       date_text.draw(&mut display).unwrap();
 
-      // let draw_dt =  sys_rtc.now().unwrap();
-
-      // Demonstrating how to use the partial refresh feature of the screen.
-      // Real animations can be used.
-      // epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
-      // epd.clear_frame(&mut spi, &mut delay).unwrap();
-
       // push changes to display
       epd.wake_up(&mut spi, &mut delay).unwrap();
       epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
-      // let final_dt = sys_rtc.now().unwrap();
-      // println!("tdelta {}", final_dt.second - draw_dt.second);
+
+      if target_second > 55  {
+        println!("skip to {}", target_second);
+        continue;
+      }
 
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
 
-      if rtc_time.second() > 54 && rtc_time.second() <= 59 {
-        continue;
-      }
-
-      target_time  = rtc_time.add(Duration::minutes(1))
-        .with_second(0).unwrap()
-        .sub(Duration::seconds(5));
+      target_second = 55;
+      target_time  = rtc_dt.time().with_second(target_second).unwrap();
       println!("target_time min {} sec {}", target_time.minute(), target_time.second());
 
-      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
       sys_rtc.schedule_alarm(rtc::DateTimeFilter::default()
-          // .minute(target_time.minute() as u8)
-        .second(target_time.second() as u8)
+        .second(target_second as u8)
       );
       enable_rtc_interrupt();
 
