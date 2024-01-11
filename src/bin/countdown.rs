@@ -308,24 +308,27 @@ fn main() -> ! {
 
   queue_tune(&DO_RE_MI_TUNE_SHORT, &mut sio.fifo);
 
+
+  let mut target_time  = rtc_dt.time().add(Duration::minutes(1)).with_second(0).unwrap();
+
   println!("enter loop...");
-  let mut last_minute = 99;
+  // let mut last_minute = 99;
   loop {
+    // get time from external RTC
     if let Ok(rtc_dt) = rtc.datetime() {
-      if rtc_dt.minute() == last_minute {
+      let rtc_time = rtc_dt.time();
+      if rtc_time.lt(&target_time) {
+      // if rtc_dt.minute() == last_minute {
         sys_rtc.set_datetime( naivedatetime_to_hms(&rtc_dt)).unwrap();
         // don't refresh until the next minute
-        println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
+        println!("wait..{:02}:{:02}", rtc_time.minute(), rtc_time.second());
         delay.delay_ms(100);
         continue;
       }
       let _ = led_pin.set_high();
-      last_minute = rtc_dt.minute();
+      // last_minute = rtc_dt.minute();
 
-      // get time from external RTC
-      // let rtc_dt = rtc.datetime().unwrap();
       let local_dt = rtc_dt.sub(Duration::hours(8));
-
       println!("check: {:02}:{:02}:{:02}",
                local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second());
 
@@ -342,7 +345,18 @@ fn main() -> ! {
         queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
       }
       else {
-        queue_note(&FAST_PIP,  &mut sio.fifo);
+        match rtc_time.second() {
+          0 => {
+            queue_note(&BBC_TIME_LONG_PIP, &mut sio.fifo);
+          }
+          59 | 58 | 57 | 56 | 55  => {
+            queue_note(&BBC_TIME_PIP, &mut sio.fifo);
+            delay.delay_ms(500);
+          }
+          _ => {
+            println!("weird sec: {}", rtc_time.second());
+          }
+        }
       }
 
       display.clear_buffer(Color::White);
@@ -388,15 +402,26 @@ fn main() -> ! {
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
 
+      if rtc_time.second() > 54 && rtc_time.second() <= 59 {
+        continue;
+      }
 
-      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
+      target_time  = rtc_time.add(Duration::minutes(1))
+        .with_second(0).unwrap()
+        .sub(Duration::seconds(5));
+      println!("target_time min {} sec {}", target_time.minute(), target_time.second());
+
+      // sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(0));
+      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default()
+          // .minute(target_time.minute() as u8)
+        .second(target_time.second() as u8)
+      );
       enable_rtc_interrupt();
 
       println!("sleep...");
       let _ = led_pin.set_low();
       cortex_m::asm::wfi();
       println!("awake...");
-
     }
     else {
       println!("datetime failed");
@@ -529,18 +554,12 @@ fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay, note: Simple
       delay.delay_ms(note.1);
     // }
   }
+  pwm.channel_a.set_duty(0);
   if note.2 > 0 {
-    pwm.channel_a.set_duty(0);
     delay.delay_ms(note.2);
   }
 }
 
-// fn play_tune(tune: &[SimpleNote], pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay) {
-//   println!("play tune: {}", tune.len());
-//   for note in tune {
-//     play_note(pwm, delay, *note);
-//   }
-// }
 
 fn queue_tune(tune: &[SimpleNote], fifo: &mut SioFifo)
 {
@@ -658,8 +677,8 @@ pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
 pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, EIGHTH_BEAT, HALF_PAUSE);
-pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 900);
-pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, STANDARD_PAUSE);
+pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 0);
+pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, 0);
 
 
 const TUNE_BPM: u8 = 83; //166 alternate
@@ -673,14 +692,17 @@ pub const EIGHTH_BEAT:u32 = BEAT/8;
 pub const TWO_BEAT:u32 = BEAT*2;
 pub const FOUR_BEAT:u32 = BEAT*4;
 pub const EIGHT_BEAT:u32 = BEAT*8;
-pub const BEAT_MAP: [u32; 7] = [
+pub const BEAT_MAP: [u32; 10] = [
   EIGHTH_BEAT,
   QTR_BEAT,
   HALF_BEAT,
   BEAT,
   TWO_BEAT,
   FOUR_BEAT,
-  EIGHT_BEAT
+  EIGHT_BEAT,
+  100,
+  500,
+  900
 ];
 
 pub const STANDARD_PAUSE:u32 = 10;
@@ -691,10 +713,6 @@ pub const SILENCIO: SimpleNote = (0.0, 0, BEAT);
 pub const DO_RE_MI_TUNE: [SimpleNote; 8] = [C4, D4, E4, F4, G4, A4, B4, C5, ];
 pub const DO_RE_MI_TUNE_SHORT: [SimpleNote; 3] = [C4, D4, E4 ];
 
-pub const BBC_HOUR_PIPS: [SimpleNote; 6] =
-  [BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_PIP, BBC_TIME_LONG_PIP];
-
-pub const BIG_BEN_NOTE_SHORT: SimpleNote = (FREQ_E3, BEAT, STANDARD_PAUSE);
 
 pub const HOURLY_CHIME: [SimpleNote; 8] = [
   // TODO big-ben-ify?
