@@ -310,7 +310,7 @@ fn main() -> ! {
   queue_tune(&DO_RE_MI_TUNE_SHORT, &mut sio.fifo);
 
 
-  let mut target_time  = rtc_dt.time();//.add(Duration::minutes(1)).with_second(0).unwrap();
+  let mut target_time  = rtc_dt.time();
 
   println!("enter loop...");
   let mut target_second = 0;
@@ -321,15 +321,15 @@ fn main() -> ! {
         sys_rtc.set_datetime( naivedatetime_to_hms(&rtc_dt)).unwrap();
         // don't refresh until the next minute
         println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
-        delay.delay_ms(250);
+        delay.delay_ms(10);
         continue;
       }
       let _ = led_pin.set_high();
 
       let local_dt = rtc_dt.sub(Duration::hours(8));
-      println!("check: {:02}:{:02}:{:02} target_second: {}",
-               local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second(),
-                target_second);
+      // println!("check: {:02}:{:02}:{:02} target_second: {}",
+      //          local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second(),
+      //           target_second);
 
       if local_dt.minute() == 0 {
         if local_dt.hour() == 0  && local_dt.day() == 1 && local_dt.month() == 1   {
@@ -405,11 +405,9 @@ fn main() -> ! {
 
       target_second = 55;
       target_time  = rtc_dt.time().with_second(target_second).unwrap();
-      println!("target_time min {} sec {}", target_time.minute(), target_time.second());
+      println!("target_time {} min {} sec", target_time.minute(), target_time.second());
 
-      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default()
-        .second(target_second as u8)
-      );
+      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(55));
       enable_rtc_interrupt();
 
       println!("sleep...");
