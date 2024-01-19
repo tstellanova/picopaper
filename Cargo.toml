@@ -33,4 +33,5 @@ numtoa = "0.2.4"
 arraystring = {version="0.3.0" , default-features = false}
 compile-time = "0.2.0"
 time = {version="0.3.29", default-features = false}
+arrayvec = { version="0.7.4",  default-features = false }
 statig = "0.3.0"

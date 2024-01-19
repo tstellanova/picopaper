@@ -29,7 +29,7 @@ use p_hal::{
   pac::{self},
   sio::Sio,
   watchdog::Watchdog,
-  rtc::{self, DayOfWeek},
+  rtc::{self, DayOfWeek, DateTimeFilter},
   gpio::{FunctionI2C, PullUp},
   pwm::{FreeRunning, Pwm3, Slice},
 
@@ -102,11 +102,12 @@ fn naivedatetime_to_hms(dt: &NaiveDateTime) -> rtc::DateTime {
 
 const EXTERNAL_XTAL_FREQ_HZ:u32 = 12_000_000u32;
 
-//Pin<FunctionPwm,PullNone,Gp22Pwm3>
-// type PwmPinType = Pin<FunctionPwm,PullNone,Gp22Pwm3>;
+const COUNTDOWN_DURATION_SECS:u32 = 10;
+const COUNTDOWN_TRIGGER_SECS:u32 = 60 - COUNTDOWN_DURATION_SECS;
+
 type PwmPinType = Pin<gpio::bank0::Gpio22, gpio::FunctionPwm, gpio::PullDown>;
 
-pub fn draw_text(display: &mut DisplayType, text: &str, x: i32, y: i32) {
+pub fn draw_plain_text(display: &mut DisplayType, text: &str, x: i32, y: i32) {
   let text_color = epd_waveshare::color::Black;
   let bg_color = epd_waveshare::color::White;
   let style = MonoTextStyleBuilder::new()
@@ -118,6 +119,11 @@ pub fn draw_text(display: &mut DisplayType, text: &str, x: i32, y: i32) {
   let text_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
   let _ = Text::with_text_style(text, Point::new(x, y), style, text_style).draw(display);
 }
+
+
+// fn fake_datetime(prior_dt: &NaiveDateTime) -> Option<NaiveDateTime> {
+//   prior_dt.with_hour(prior_dt.hour() + 1).unwrap().with_minute(0).unwrap().with_second(0)
+// }
 
 #[entry]
 fn main() -> ! {
@@ -154,10 +160,8 @@ fn main() -> ! {
     sio.gpio_bank0,
     &mut pac.RESETS,
   );
-
-
-  let silly_pin:PwmPinType = pins.gpio22.into_function::<gpio::FunctionPwm>();
-
+  // configure the pwm audio out pin, for handoff to alternate core
+  let pwm_out_pin:PwmPinType = pins.gpio22.into_function::<gpio::FunctionPwm>();
 
   // Configure two pins as being I²C, not GPIO
   let sda_pin: Pin<_, FunctionI2C, PullUp> = pins.gpio2.reconfigure();
@@ -180,8 +184,7 @@ fn main() -> ! {
 
   // Set from external RTC to internal (since internal is known to be bogus)
   let ext_rtc_dt = {
-    let testo = ext_rtc.datetime();
-    if let Ok(val) = testo {
+    if let Ok(val) =  ext_rtc.datetime() {
       val
     }
     else {
@@ -201,7 +204,6 @@ fn main() -> ! {
 
   let mut led_pin = pins.led.into_push_pull_output();
   led_pin.set_high().unwrap();
-
 
   let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
   let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12
@@ -223,7 +225,6 @@ fn main() -> ! {
   // DIN - pin 15 (MOSI)
   // RST - pin 16 (external reset, low active)
   // BUSY - pin 17 (display busy status output)
-  //
 
   // (Tx, Sck) (MOSI, SCK)
   let spi1_periph = p_hal::Spi::<_, _, _, 8>::new(pac.SPI1, (spi1_do_pin, spi1_sck_pin) );
@@ -231,7 +232,7 @@ fn main() -> ! {
   // for rendering strings
   // let mut text_buf =  ArrayString::<U40>::new();
 
-  println!("create SPI...");
+  // println!("create SPI...");
   // Exchange the uninitialized SPI driver for an initialized one
   let mut spi = spi1_periph.init(
     &mut pac.RESETS,
@@ -240,7 +241,7 @@ fn main() -> ! {
     embedded_hal::spi::MODE_0
   );
 
-  println!("create EPD...");
+  // println!("create EPD...");
   let mut epd = Epd2in13::new(
     &mut spi,
     cs_pin,
@@ -253,21 +254,20 @@ fn main() -> ! {
   epd.wake_up(&mut spi, &mut delay).expect("EPD wake_up fail");
   epd.clear_frame(&mut spi, &mut delay).expect("EPD clear_frame fail");
 
-  println!("create display...");
+  // println!("create display...");
   // Use display graphics from embedded-graphics
   let mut display = DisplayType::default();
   display.clear_buffer(Color::White);
 
   let raw_disp_dim = display.size();
   // should be 122 w x 250 h
-  println!("raw_disp_dim : w {} x h {}", raw_disp_dim.width, raw_disp_dim.height);
+  // println!("raw_disp_dim : w {} x h {}", raw_disp_dim.width, raw_disp_dim.height);
   let disp_width = raw_disp_dim.width.max(raw_disp_dim.height) as i32;
   let disp_height = raw_disp_dim.width.min(raw_disp_dim.height) as i32;
   let min_dim = disp_height / 2;
 
   display.set_rotation(DisplayRotation::Rotate270);
-  draw_text(&mut display, "270: Todd Stellanova !", min_dim, min_dim);
-
+  draw_plain_text(&mut display, "Todd Stellanova 2024!", min_dim, min_dim);
   epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay).expect("update fail");
 
   led_pin.set_low().unwrap();
@@ -291,7 +291,7 @@ fn main() -> ! {
 
   const TEXT_FONT_HEIGHT: i32 = 20;
   let ctr_point =  Point::new(disp_width/2 , disp_height/2);
-  println!("ctr_point.y: {}", ctr_point.y);
+  // println!("ctr_point.y: {}", ctr_point.y);
   let hms_point = Point::new(ctr_point.x, 0 );
   let wd_point = ctr_point.add(Point::new(0,10));
   let date_point = wd_point.add(Point::new(0,TEXT_FONT_HEIGHT));
@@ -308,69 +308,72 @@ fn main() -> ! {
   let cores = mc.cores();
   let core1 = &mut cores[1];
   core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
-    core1_task(clocks.system_clock.freq().to_Hz(), silly_pin)
+    core1_task(clocks.system_clock.freq().to_Hz(), pwm_out_pin)
   }).unwrap();
 
   queue_tune(&DO_RE_MI_TUNE_SHORT, &mut sio.fifo);
 
-  let mut target_time  = ext_rtc_dt.time();
+  epd.wake_up(&mut spi, &mut delay).unwrap();
+  epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
 
-  println!("enter loop...");
-  let mut target_second;
+  let mut next_refresh_dt = ext_rtc_dt;
+  println!("enter loop {}", next_refresh_dt.timestamp_millis());
+
+  let dur_one_second: Duration = Duration::seconds(1);
+  let dur_pt_tz_offset: Duration = Duration::hours(8);
+
   loop {
     // get time from external RTC
-    if let Ok(rtc_dt) = ext_rtc.datetime() {
-      if rtc_dt.time().lt(&target_time) {
-        sys_rtc.set_datetime( naivedatetime_to_hms(&rtc_dt)).unwrap();
-        // don't refresh until the next minute
-        println!("wait..{:02}:{:02}", rtc_dt.minute(), rtc_dt.second());
-        delay.delay_ms(10);
-        continue;
+    if let Ok(ext_rtc_dt) = ext_rtc.datetime() {
+      let ext_rtc_ms = ext_rtc_dt.timestamp_millis();
+      let next_refr_ms = next_refresh_dt.timestamp_millis();
+      let ms_delta = ext_rtc_ms - next_refr_ms;
+      if ms_delta < 0  {
+        sys_rtc.set_datetime( naivedatetime_to_hms(&ext_rtc_dt)).unwrap();
+        // don't refresh until next_refresh_dt
+        println!("wait {} < {} : {}",  ext_rtc_ms,  next_refr_ms, ms_delta);
+        let guess_ms = ms_delta.abs() - 1;
+        if guess_ms > 0 {
+          println!("wait {} ms",guess_ms);
+          delay.delay_ms(guess_ms as u32);
+          continue;
+        }
       }
+
+      println!("refr {} >= {}", ext_rtc_ms, next_refr_ms);
+
       let _ = led_pin.set_high();
+      let local_dt = ext_rtc_dt.sub(dur_pt_tz_offset);
 
-      let local_dt = rtc_dt.sub(Duration::hours(8));
-      // println!("check: {:02}:{:02}:{:02} target_second: {}",
-      //          local_dt.time().hour() , local_dt.time().minute(), local_dt.time().second(),
-      //           target_second);
+      let cur_time_evt = gen_time_event(&local_dt);
 
-      // mode checks
-      if local_dt.minute() == 0 {
-        // At top of hour we may take some actions
-        if local_dt.hour() == 0  && local_dt.day() == 1 && local_dt.month() == 1   {
-          // If it's the turn of the New Year we play Auld Lang Syne
-          queue_tune(&AULD_LANG_SYNE_VERSE1, &mut sio.fifo);
+
+      // handle time events
+      let mut countdown_active = false;
+      match cur_time_evt {
+        Some(TimeTriggerEvent::NewYearTurnover) => {
+          // queue_tune(&AULD_LANG_SYNE_VERSE1, &mut sio.fifo);
           queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
           queue_tune(&AULD_LANG_SYNE_VERSE2, &mut sio.fifo);
         }
-        else {
-          // If it's the hour, we play the hourly chime (similar to Westminster Chimes)
+        Some(TimeTriggerEvent::HourlyTurnover) => {
           queue_tune(&HOURLY_CHIME, &mut sio.fifo);
         }
-        target_second = 0;
-      }
-      else if local_dt.minute() % 30 == 0 {
-        // At bottom of hour, play half hour chime
-        queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
-        target_second = 0;
-      }
-      else {
-        match rtc_dt.second() {
-          0 | 1  => { // TODO this is unused, now?
-            queue_note(&BBC_TIME_LONG_PIP, &mut sio.fifo);
-            target_second = 0;
-          }
-          59 | 58 | 57 | 56 | 55  => {
-            queue_note(&BBC_TIME_PIP, &mut sio.fifo);
-            target_second = rtc_dt.second() + 1; // can go up to 60
-          }
-          _ => {
-            println!("weird sec: {}", rtc_dt.second());
-            target_second = 0;
-          }
+        Some(TimeTriggerEvent::HalfHourTurnover) => {
+          queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
+        }
+        Some(TimeTriggerEvent::MinuteTurnover) => {
+          queue_note(&FAST_PIP, &mut sio.fifo);
+        }
+        Some(TimeTriggerEvent::CountdownSecTurnover) => {
+          queue_note(&BBC_TIME_PIP, &mut sio.fifo);
+          countdown_active = true;
+        }
+        None => {
         }
       }
 
+      // Render changes
       display.clear_buffer(Color::White);
       render_time_date(
         &mut display, &local_dt,
@@ -378,33 +381,52 @@ fn main() -> ! {
         &large_hms_style,
         &med_date_style,
         ALIGN_STYLE,
-        target_second != 0
+        countdown_active
       );
 
       // push changes to display
-      epd.wake_up(&mut spi, &mut delay).unwrap();
-      epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
+      // epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
 
-      if target_second > 55  {
-        println!("next {}", target_second);
+      // we're in a tight countdown loop
+      if countdown_active   {
+        next_refresh_dt = ext_rtc_dt.add(dur_one_second).with_nanosecond(0).unwrap();
+        let sys_dt = sys_rtc.now().unwrap();
+        let guess_sec = next_refresh_dt.second() as i32 - sys_dt.second as i32;
+        if guess_sec > 0 {
+          println!("guess_sec: {}", guess_sec);
+          delay.delay_ms( (guess_sec * 1000) as u32 );
+        }
         continue;
       }
 
+      // calculate the time at which we should wake from sleep and refresh the display next
+      // TODO this should generate an event or transition to a new "countdown" state?
+      let next_minute = ext_rtc_dt.add(Duration::minutes(1));
+      next_refresh_dt =
+        if next_minute.minute() % 15 == 0 { // TODO change to == 0 for top of hour countdown only
+          ext_rtc_dt.with_second(COUNTDOWN_TRIGGER_SECS).unwrap()
+        }
+        else {
+          next_minute.with_second(0).unwrap()
+        };
+
+      println!("nrf {:02}:{:02} ", next_refresh_dt.minute(), next_refresh_dt.second());
+
+      sys_rtc.schedule_alarm(DateTimeFilter::default()
+        .minute(next_refresh_dt.minute() as u8)
+        .second(next_refresh_dt.second() as u8));
+
       // put display into low power mode
       epd.sleep(&mut spi, &mut delay).unwrap();
-
-      target_second = 55;
-      target_time  = rtc_dt.time().with_second(target_second).unwrap();
-      println!("target_time {} min {} sec", target_time.minute(), target_time.second());
-
-      sys_rtc.schedule_alarm(rtc::DateTimeFilter::default().second(55));
       enable_rtc_interrupt();
-
-      println!("sleep...");
+      // println!("sleep...");
       let _ = led_pin.set_low();
       cortex_m::asm::wfi();
-      println!("awake...");
+      // println!("awake...");
+      epd.wake_up(&mut spi, &mut delay).unwrap();
+      epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
+
     }
     else {
       println!("datetime failed");
@@ -416,8 +438,43 @@ fn main() -> ! {
 }
 
 
+fn gen_time_event(local_dt: &NaiveDateTime) -> Option<TimeTriggerEvent> {
+  let mut cur_time_evt: Option<TimeTriggerEvent> = None;
+  // determine which mode we're in
+  if local_dt.minute() == 0 {
+    // At top of hour
+    if local_dt.hour() == 0  && local_dt.day() == 1 && local_dt.month() == 1   {
+      cur_time_evt = Some(TimeTriggerEvent::NewYearTurnover);
+    }
+    else {
+      cur_time_evt = Some(TimeTriggerEvent::HourlyTurnover);
+    }
+  }
+  else if local_dt.minute() % 30 == 0 {
+    cur_time_evt = Some(TimeTriggerEvent::HalfHourTurnover);
+  }
+  else {
+    let cur_sec = local_dt.second();
+    if cur_sec == 0  {
+      cur_time_evt = Some(TimeTriggerEvent::MinuteTurnover);
+    }
+    else if (60 - cur_sec) <= COUNTDOWN_DURATION_SECS {
+      cur_time_evt = Some(TimeTriggerEvent::CountdownSecTurnover);
+    }
+  }
+  cur_time_evt
+}
+
 
 // === State Machine stuff
+
+pub enum TimeTriggerEvent {
+  NewYearTurnover,
+  HourlyTurnover,
+  HalfHourTurnover,
+  MinuteTurnover,
+  CountdownSecTurnover
+}
 
 // use statig::prelude::*;
 //
@@ -623,7 +680,7 @@ fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay, note: Simple
 
 fn queue_tune(tune: &[SimpleNote], fifo: &mut SioFifo)
 {
-  println!("queue tune: {}", tune.len());
+  // println!("queue tune: {}", tune.len());
   for note in tune {
     queue_note(note, fifo);
   }
@@ -687,7 +744,7 @@ const FREQ_B4: NoteFrequencyHz = 493.88;
 const FREQ_C5: NoteFrequencyHz = 523.25;
 const FREQ_D5: NoteFrequencyHz = 587.33;
 const FREQ_BBC_TIME_PIP: NoteFrequencyHz = 1000.0;
-const FREQ_FAST_PIP: NoteFrequencyHz  = 400.0;
+const FREQ_FAST_PIP: NoteFrequencyHz  = 800.0;
 
 const FREQ_KEY_MAP: [NoteFrequencyHz; 20] = [
   FREQ_B2,
@@ -736,7 +793,7 @@ pub const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
 pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
-pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, EIGHTH_BEAT, HALF_PAUSE);
+pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, 100, 0);
 pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 0);
 pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, 0);
 
@@ -806,7 +863,7 @@ D5 C5 A4 A4 F4 G4 F4 G4 D5 C5
 A4 A4 C5 D5 D5 C5 A4 A4
 F4 G4 F4 G4 A4 G4 F4 D4 D4 C4 F4
  */
-const AULD_LANG_SYNE_VERSE1: [SimpleNote; 32] = [
+pub const AULD_LANG_SYNE_VERSE1: [SimpleNote; 32] = [
   C4, //(FREQ_C4, TWO_BEAT, STANDARD_PAUSE),
   F4,
   (FREQ_E4, HALF_BEAT, STANDARD_PAUSE),
@@ -843,6 +900,7 @@ const AULD_LANG_SYNE_VERSE2: [SimpleNote; 32] = [
 use p_hal::multicore::{Multicore, Stack};
 use rp_pico::hal::gpio;
 use rp_pico::hal::sio::SioFifo;
+use arrayvec::ArrayVec;
 
 /// Stack for core 1
 ///
@@ -865,7 +923,7 @@ fn core1_task(sys_freq: u32, silly_pin: PwmPinType) -> ! {
 
   let mut sio = Sio::new(pac.SIO);
   let mut delay = cortex_m::delay::Delay::new(core.SYST, sys_freq);
-
+  let mut note_list = ArrayVec::<_, 30>::new();
   // println!("setup PWM player: {} ms per beat", MS_PER_BEAT);
   let mut pwm_slices = p_hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
 
@@ -895,7 +953,7 @@ fn core1_task(sys_freq: u32, silly_pin: PwmPinType) -> ! {
   pwm.set_div_int(AUDIO_PWM_DIVISOR); // To set integer part of clock divider
   pwm.set_div_frac(0u8); // To set fractional part of clock divider
 
-  loop {
+  'readloop: loop {
     let word = sio.fifo.read_blocking();
     let msg_bytes:[u8; 4] = word.to_ne_bytes();
     if msg_bytes[0] == 0 { // MAGIC byte
@@ -904,8 +962,18 @@ fn core1_task(sys_freq: u32, silly_pin: PwmPinType) -> ! {
         BEAT_MAP[msg_bytes[2] as usize] as u32,
         msg_bytes[3] as u32
       );
-      println!("le_note: {}", le_note);
-      play_note(&mut pwm, &mut delay, le_note);
+      note_list.push(le_note);
+    }
+
+    // play notes in the queue
+    while !sio.fifo.is_read_ready() {
+      // println!("le_note: {}", le_note);
+      if let Some(note) = note_list.pop_at(0) {
+        play_note(&mut pwm, &mut delay, note);
+      }
+      else {
+        continue 'readloop;
+      }
     }
 
   }
