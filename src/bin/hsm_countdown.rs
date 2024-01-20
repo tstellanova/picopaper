@@ -181,19 +181,24 @@ fn main() -> ! {
 
   // Create a new instance of the RV3028 driver
   let mut ext_rtc = RV3028::new(i2c);
+  let mut prior_millis = 0;
+  let ext_rtc_dt =
+    loop {
+      if let Ok(cur_dt) = ext_rtc.datetime() {
+        let cur_millis = cur_dt.timestamp_millis();
+        if 0 == prior_millis { prior_millis = cur_millis; }
+        if cur_millis != prior_millis {
+          // we've hopefully aligned at the nearest second
+          break cur_dt;
+        }
+        prior_millis = cur_millis;
+      }
+      else {
+        break NaiveDateTime::default();
+      }
+    };
 
-  // Set from external RTC to internal (since internal is known to be bogus)
-  let ext_rtc_dt = {
-    if let Ok(val) =  ext_rtc.datetime() {
-      val
-    }
-    else {
-      println!("ext rtc fail");
-      NaiveDateTime::default()
-    }
-  } ;
-
-  // let mut rtc_dt = NaiveDateTime::default();
+  // Set from external RTC to internal (since internal is known to be bogus
   let sys_dt = naive_datetime_to_rpico(&ext_rtc_dt);
   let mut sys_rtc = p_hal::rtc::RealTimeClock::new(
     pac.RTC,
@@ -201,36 +206,25 @@ fn main() -> ! {
     &mut pac.RESETS,
     sys_dt,
   ).unwrap();
-
+  println!("time aligned at {:02}:{:02}:{:02}", ext_rtc_dt.hour(), ext_rtc_dt.minute(), ext_rtc_dt.second());
   let mut led_pin = pins.led.into_push_pull_output();
   led_pin.set_high().unwrap();
 
-  let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11
-  let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12
+  // pico paper pins for 2.13 inch b/w display with partial refresh
+  let mut dc_pin  = pins.gpio8.into_push_pull_output(); // D/C -- pin 11 (data/command, high for data, low for command)
+  let mut cs_pin = pins.gpio9.into_push_pull_output(); // SPI1 CS -- pin 12 (chip select, low active)
   let spi1_sck_pin = pins.gpio10.into_function::<bsp::hal::gpio::FunctionSpi>(); //SCK -- pin 14
   let spi1_do_pin = pins.gpio11.into_function::<bsp::hal::gpio::FunctionSpi>(); //MOSI -- pin 15
   // rst_pin is used to reset the display during power-on sequence
-  let mut rst_pin = pins.gpio12.into_push_pull_output(); //RST - pin 16
-  let busy_in = pins.gpio13.into_floating_input(); //BUSY pin 17
+  let mut rst_pin = pins.gpio12.into_push_pull_output(); //RST - pin 16  (external reset, low active)
+  let busy_in = pins.gpio13.into_floating_input(); //BUSY pin 17 (display busy status output)
 
   dc_pin.set_high().unwrap();
   cs_pin.set_high().unwrap();
   rst_pin.set_high().unwrap();
 
-  // pico paper pins for 2.13 inch b/w display with partial refresh
-  // DC - pin 11 (data/command, high for data, low for command)
-  // CS - pin 12 (chip select, low active)
-  // GND - pin 13
-  // CLK - pin 14 (SCK)
-  // DIN - pin 15 (MOSI)
-  // RST - pin 16 (external reset, low active)
-  // BUSY - pin 17 (display busy status output)
-
   // (Tx, Sck) (MOSI, SCK)
   let spi1_periph = p_hal::Spi::<_, _, _, 8>::new(pac.SPI1, (spi1_do_pin, spi1_sck_pin) );
-
-  // for rendering strings
-  // let mut text_buf =  ArrayString::<U40>::new();
 
   // println!("create SPI...");
   // Exchange the uninitialized SPI driver for an initialized one
@@ -254,7 +248,6 @@ fn main() -> ! {
   epd.wake_up(&mut spi, &mut delay).expect("EPD wake_up fail");
   epd.clear_frame(&mut spi, &mut delay).expect("EPD clear_frame fail");
 
-  // println!("create display...");
   // Use display graphics from embedded-graphics
   let mut display = DisplayType::default();
   display.clear_buffer(Color::White);
@@ -317,36 +310,33 @@ fn main() -> ! {
   epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
 
   let mut next_refresh_dt = ext_rtc_dt;
-  println!("enter loop {}", next_refresh_dt.timestamp_millis());
+  println!("enter loop {:02}.{:02}", next_refresh_dt.minute(), next_refresh_dt.second());
 
   let dur_one_second: Duration = Duration::seconds(1);
   let dur_pt_tz_offset: Duration = Duration::hours(8);
 
+  let mut countdown_ping_count = 0;
   loop {
     // get time from external RTC
     if let Ok(ext_rtc_dt) = ext_rtc.datetime() {
-      let ext_rtc_ms = ext_rtc_dt.timestamp_millis();
-      let next_refr_ms = next_refresh_dt.timestamp_millis();
-      let ms_delta = ext_rtc_ms - next_refr_ms;
-      if ms_delta < 0  {
+      if ext_rtc_dt.lt(&next_refresh_dt) {
+        println!("wait!");
         sys_rtc.set_datetime( naivedatetime_to_hms(&ext_rtc_dt)).unwrap();
-        // don't refresh until next_refresh_dt
-        println!("wait {} < {} : {}",  ext_rtc_ms,  next_refr_ms, ms_delta);
-        let guess_ms = ms_delta.abs() - 1;
-        if guess_ms > 0 {
-          println!("wait {} ms",guess_ms);
-          delay.delay_ms(guess_ms as u32);
-          continue;
-        }
+        delay.delay_ms(21u32);
+        continue;
       }
+      let ext_rtc_sec = ext_rtc_dt.second();
+      println!("refr {:02}", ext_rtc_sec);
 
-      println!("refr {} >= {}", ext_rtc_ms, next_refr_ms);
+      // println!("refr {:02}.{:02} >= {:02}.{:02}",
+      //          ext_rtc_dt.minute(), ext_rtc_sec,
+      //          next_refresh_dt.minute(), next_refresh_dt.second());
 
       let _ = led_pin.set_high();
+      // TODO calculate TZ offset based on date (for Pacific TZ)
       let local_dt = ext_rtc_dt.sub(dur_pt_tz_offset);
 
       let cur_time_evt = gen_time_event(&local_dt);
-
 
       // handle time events
       let mut countdown_active = false;
@@ -383,20 +373,24 @@ fn main() -> ! {
         ALIGN_STYLE,
         countdown_active
       );
+      if countdown_active {
+        countdown_ping_count += 1;
+      }
+      else {
+        countdown_ping_count = 0;
+      }
 
       // push changes to display
-      // epd.set_refresh(&mut spi, &mut delay, RefreshLut::Quick).unwrap();
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
+
+      // let interim_dt = ext_rtc.datetime().unwrap();
+      // let update_interval = interim_dt.sub(ext_rtc_dt);
+      // println!("updated in {} ms",update_interval.num_milliseconds());
 
       // we're in a tight countdown loop
       if countdown_active   {
-        next_refresh_dt = ext_rtc_dt.add(dur_one_second).with_nanosecond(0).unwrap();
-        let sys_dt = sys_rtc.now().unwrap();
-        let guess_sec = next_refresh_dt.second() as i32 - sys_dt.second as i32;
-        if guess_sec > 0 {
-          println!("guess_sec: {}", guess_sec);
-          delay.delay_ms( (guess_sec * 1000) as u32 );
-        }
+        println!("count: {}", countdown_ping_count);
+        next_refresh_dt = ext_rtc_dt.add(dur_one_second);
         continue;
       }
 
@@ -404,7 +398,7 @@ fn main() -> ! {
       // TODO this should generate an event or transition to a new "countdown" state?
       let next_minute = ext_rtc_dt.add(Duration::minutes(1));
       next_refresh_dt =
-        if next_minute.minute() % 15 == 0 { // TODO change to == 0 for top of hour countdown only
+        if next_minute.minute() % 5 == 0 { // TODO change to == 0 for top of hour countdown only
           ext_rtc_dt.with_second(COUNTDOWN_TRIGGER_SECS).unwrap()
         }
         else {
