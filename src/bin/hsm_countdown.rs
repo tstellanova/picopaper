@@ -226,7 +226,7 @@ fn main() -> ! {
   // (Tx, Sck) (MOSI, SCK)
   let spi1_periph = p_hal::Spi::<_, _, _, 8>::new(pac.SPI1, (spi1_do_pin, spi1_sck_pin) );
 
-  // println!("create SPI...");
+  println!("create SPI...");
   // Exchange the uninitialized SPI driver for an initialized one
   let mut spi = spi1_periph.init(
     &mut pac.RESETS,
@@ -235,7 +235,7 @@ fn main() -> ! {
     embedded_hal::spi::MODE_0
   );
 
-  // println!("create EPD...");
+  println!("create EPD...");
   let mut epd = Epd2in13::new(
     &mut spi,
     cs_pin,
@@ -245,7 +245,9 @@ fn main() -> ! {
     &mut delay,
   ).expect("epaper new error");
 
+  println!("wakeup...");
   epd.wake_up(&mut spi, &mut delay).expect("EPD wake_up fail");
+  println!("clear_frame...");
   epd.clear_frame(&mut spi, &mut delay).expect("EPD clear_frame fail");
 
   // Use display graphics from embedded-graphics
@@ -261,6 +263,7 @@ fn main() -> ! {
 
   display.set_rotation(DisplayRotation::Rotate270);
   draw_plain_text(&mut display, "Todd Stellanova 2024!", min_dim, min_dim);
+  println!("update EPD...");
   epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay).expect("update fail");
 
   led_pin.set_low().unwrap();
@@ -315,18 +318,18 @@ fn main() -> ! {
   let dur_one_second: Duration = Duration::seconds(1);
   let dur_pt_tz_offset: Duration = Duration::hours(8);
 
-  let mut countdown_ping_count = 0;
+  // let mut countdown_ping_count = 0;
   loop {
     // get time from external RTC
     if let Ok(ext_rtc_dt) = ext_rtc.datetime() {
       if ext_rtc_dt.lt(&next_refresh_dt) {
         println!("wait!");
         sys_rtc.set_datetime( naivedatetime_to_hms(&ext_rtc_dt)).unwrap();
-        delay.delay_ms(21u32);
+        delay.delay_ms(5);
         continue;
       }
-      let ext_rtc_sec = ext_rtc_dt.second();
-      println!("refr {:02}", ext_rtc_sec);
+      // let ext_rtc_sec = ext_rtc_dt.second();
+      // println!("refr {:02}", ext_rtc_sec);
 
       // println!("refr {:02}.{:02} >= {:02}.{:02}",
       //          ext_rtc_dt.minute(), ext_rtc_sec,
@@ -336,10 +339,10 @@ fn main() -> ! {
       // TODO calculate TZ offset based on date (for Pacific TZ)
       let local_dt = ext_rtc_dt.sub(dur_pt_tz_offset);
 
-      let cur_time_evt = gen_time_event(&local_dt);
 
       // handle time events
       let mut countdown_active = false;
+      let cur_time_evt = gen_time_event(&local_dt);
       match cur_time_evt {
         Some(TimeTriggerEvent::NewYearTurnover) => {
           // queue_tune(&AULD_LANG_SYNE_VERSE1, &mut sio.fifo);
@@ -353,10 +356,10 @@ fn main() -> ! {
           queue_tune(&HALF_HOUR_CHIME, &mut sio.fifo);
         }
         Some(TimeTriggerEvent::MinuteTurnover) => {
-          queue_note(&FAST_PIP, &mut sio.fifo);
+          //queue_note(&FAST_PIP, &mut sio.fifo);
         }
         Some(TimeTriggerEvent::CountdownSecTurnover) => {
-          queue_note(&BBC_TIME_PIP, &mut sio.fifo);
+          queue_note(&FAST_PIP, &mut sio.fifo);
           countdown_active = true;
         }
         None => {
@@ -373,12 +376,12 @@ fn main() -> ! {
         ALIGN_STYLE,
         countdown_active
       );
-      if countdown_active {
-        countdown_ping_count += 1;
-      }
-      else {
-        countdown_ping_count = 0;
-      }
+      // if countdown_active {
+      //   countdown_ping_count += 1;
+      // }
+      // else {
+      //   countdown_ping_count = 0;
+      // }
 
       // push changes to display
       epd.update_and_display_frame(&mut spi, &display.buffer(), &mut delay).unwrap();
@@ -389,7 +392,7 @@ fn main() -> ! {
 
       // we're in a tight countdown loop
       if countdown_active   {
-        println!("count: {}", countdown_ping_count);
+        // println!("count: {}", countdown_ping_count);
         next_refresh_dt = ext_rtc_dt.add(dur_one_second);
         continue;
       }
@@ -398,7 +401,7 @@ fn main() -> ! {
       // TODO this should generate an event or transition to a new "countdown" state?
       let next_minute = ext_rtc_dt.add(Duration::minutes(1));
       next_refresh_dt =
-        if next_minute.minute() % 5 == 0 { // TODO change to == 0 for top of hour countdown only
+        if next_minute.minute() % 30 == 0 { // TODO change top of hour countdown only
           ext_rtc_dt.with_second(COUNTDOWN_TRIGGER_SECS).unwrap()
         }
         else {
@@ -614,6 +617,18 @@ pub const CLOCK_FONT: mono_font::MonoFont = mono_font::MonoFont {
   strikethrough: mono_font::DecorationDimensions::default_strikethrough(CLOCK_FONT_HEIGHT),
 };
 
+pub const TEXT_FONT: mono_font::MonoFont = mono_font::MonoFont {
+  image: ImageRaw::new_binary(
+    include_bytes!("../../res/mplus_60h.raw"),
+    379,
+  ),
+  glyph_mapping: &mono_font::mapping::ASCII,
+  character_size: geometry::Size::new(CLOCK_FONT_WIDTH, CLOCK_FONT_HEIGHT),
+  character_spacing: 0,
+  baseline: CLOCK_FONT_HEIGHT - 1,
+  underline: mono_font::DecorationDimensions::default_underline(CLOCK_FONT_HEIGHT),
+  strikethrough: mono_font::DecorationDimensions::default_strikethrough(CLOCK_FONT_HEIGHT),
+};
 
 //=== Interrupt manipulation ===
 
@@ -654,8 +669,6 @@ fn calc_note_count(freq: f32) -> u16 {
 
 fn play_note(pwm: &mut Slice<Pwm3, FreeRunning>, delay: &mut Delay, note: SimpleNote) {
   // println!("play_note: {}", note);
-
-  // const CLOCK_FACTOR: f32 = 125_000_000 as f32 / 40 as f32;
   if note.0 > 20.0 {
     let top = calc_note_count(note.0);
     pwm.channel_a.set_duty(top / 2); // 50% duty cycle
@@ -738,7 +751,7 @@ const FREQ_B4: NoteFrequencyHz = 493.88;
 const FREQ_C5: NoteFrequencyHz = 523.25;
 const FREQ_D5: NoteFrequencyHz = 587.33;
 const FREQ_BBC_TIME_PIP: NoteFrequencyHz = 1000.0;
-const FREQ_FAST_PIP: NoteFrequencyHz  = 800.0;
+const FREQ_FAST_PIP: NoteFrequencyHz  = 440.0;
 
 const FREQ_KEY_MAP: [NoteFrequencyHz; 20] = [
   FREQ_B2,
@@ -787,7 +800,7 @@ pub const B4: SimpleNote = (FREQ_B4, BEAT, STANDARD_PAUSE);
 pub const C5: SimpleNote = (FREQ_C5, BEAT, STANDARD_PAUSE);
 pub const D5: SimpleNote = (FREQ_D5, BEAT, STANDARD_PAUSE);
 
-pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, 100, 0);
+pub const FAST_PIP: SimpleNote = (FREQ_FAST_PIP, SIXTEENTH_BEAT, 0);
 pub const BBC_TIME_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 100, 0);
 pub const BBC_TIME_LONG_PIP: SimpleNote = (FREQ_BBC_TIME_PIP, 500, 0);
 
@@ -800,10 +813,13 @@ pub const BEAT:u32 = MS_PER_BEAT;
 pub const HALF_BEAT:u32 = BEAT/2;
 pub const QTR_BEAT:u32 = BEAT/4;
 pub const EIGHTH_BEAT:u32 = BEAT/8;
+pub const SIXTEENTH_BEAT:u32 = BEAT/16;
+
 pub const TWO_BEAT:u32 = BEAT*2;
 pub const FOUR_BEAT:u32 = BEAT*4;
 pub const EIGHT_BEAT:u32 = BEAT*8;
-pub const BEAT_MAP: [u32; 10] = [
+pub const BEAT_MAP: [u32; 11] = [
+  SIXTEENTH_BEAT,
   EIGHTH_BEAT,
   QTR_BEAT,
   HALF_BEAT,
